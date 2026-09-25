@@ -1,0 +1,10 @@
+{
+  "name": "Foz Arrows",
+  "short_name": "Foz Arrows",
+  "start_url": "./",
+  "display": "standalone",
+  "orientation": "portrait",
+  "background_color": "#efe7da",
+  "theme_color": "#efe7da",
+  "icons": [{ "src": "icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any" }]
+}
