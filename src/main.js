@@ -105,6 +105,11 @@ const cubeColors = () => {
 
 // ---------------------------------------------------------------- three.js setup
 const stage = $('stage');
+// three.js needs WebGL 2 (Safari/iPadOS 15+). Without it, show the "update your browser" message.
+if (!document.createElement('canvas').getContext('webgl2')) {
+  window.__fozFail?.();
+  throw new Error('WebGL 2 is not available');
+}
 const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
 renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
 stage.appendChild(renderer.domElement);
@@ -1111,6 +1116,7 @@ function frame(now) {
 fitCamera();
 startLevel(save.level);
 requestAnimationFrame(frame);
+window.__fozReady = true;
 
 // Debug/test hook.
 window.__foz = {

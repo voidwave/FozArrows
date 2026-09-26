@@ -174,7 +174,7 @@
   #lbList ol { list-style: none; margin: 0; padding: 0; }
   #lbList li { display: grid; grid-template-columns: 36px 1fr auto auto; gap: 8px; align-items: center; padding: 10px 8px;
     border-bottom: 1px solid var(--panel-edge); font-weight: 700; text-align: start; }
-  #lbList li.me { background: color-mix(in srgb, var(--accent) 22%, transparent); border-radius: 12px; }
+  #lbList li.me { background: rgba(240,180,41,.22); background: color-mix(in srgb, var(--accent) 22%, transparent); border-radius: 12px; }
   #lbList li.gap { display: block; text-align: center; color: var(--muted); border: 0; padding: 2px; }
   #lbList .rk { font-weight: 900; text-align: center; font-size: 17px; }
   #lbList .nm { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -236,6 +236,11 @@
   #winUnlock { color: var(--accent); font-weight: 900; -webkit-text-stroke: .3px var(--ink); margin: 0 0 8px; }
   #winUnlock[hidden], #shareBtn[hidden] { display: none; }
   #shareBtn { background: var(--blue); box-shadow: 0 5px 0 #2a64c0; }
+
+  #unsupported { position: fixed; inset: 0; z-index: 50; display: grid; place-items: center; padding: 24px; background: var(--bg); text-align: center; }
+  #unsupported[hidden] { display: none; }
+  #unsupported div { max-width: 420px; font-weight: 700; line-height: 1.5; }
+  #unsupported b { display: block; font-size: 24px; margin-bottom: 8px; }
 
   @media (min-height: 800px) and (min-width: 600px) {
     #leftPill { top: calc(env(safe-area-inset-top) + 78px); }
@@ -352,6 +357,23 @@
   </div>
 </div>
 
+<div id="unsupported" hidden>
+  <div>
+    <b>😕 The game couldn't start</b>
+    Your browser is too old for Foz Arrows. On iPad or iPhone, update to iPadOS / iOS 15 or later
+    (Settings → General → Software Update), or open the game in a newer browser.
+    <br><br>
+    <b dir="rtl">😕 تعذّر تشغيل اللعبة</b>
+    <span dir="rtl">متصفحك قديم جداً. على الآيباد أو الآيفون، حدّث النظام إلى الإصدار ١٥ أو أحدث
+    (الإعدادات ← عام ← تحديث البرنامج)، أو افتح اللعبة في متصفح أحدث.</span>
+  </div>
+</div>
+<script>
+  // If the game script can't run (very old Safari, no WebGL 2), show a message instead of a dead screen.
+  window.__fozFail = function () { document.getElementById('unsupported').hidden = false; };
+  window.addEventListener('error', function () { if (!window.__fozReady) window.__fozFail(); });
+  window.addEventListener('load', function () { setTimeout(function () { if (!window.__fozReady) window.__fozFail(); }, 1500); });
+</script>
 <script type="module" src="dist/game.js"></script>
 </body>
 </html>
