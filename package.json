@@ -5,8 +5,8 @@
   "type": "module",
   "description": "Rotate the cube, free the arrows.",
   "scripts": {
-    "build": "esbuild src/main.js --bundle --minify --format=esm --outfile=dist/game.js",
-    "dev": "esbuild src/main.js --bundle --format=esm --outfile=dist/game.js --servedir=. --watch",
+    "build": "esbuild src/main.js --bundle --minify --format=esm --target=es2020,safari15 --outfile=dist/game.js",
+    "dev": "esbuild src/main.js --bundle --format=esm --target=es2020,safari15 --outfile=dist/game.js --servedir=. --watch",
     "test": "node test/generator.test.mjs"
   },
   "dependencies": {

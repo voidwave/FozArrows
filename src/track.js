@@ -58,6 +58,15 @@ export class Track {
     this.segs = segs;
   }
 
+  /** Point and surface normal at arc length s. */
+  pointAt(s) {
+    for (const g of this.segs) {
+      if (s <= g.s0 + g.len + 1e-9) return { p: g.a.clone().addScaledVector(g.t, Math.max(0, s - g.s0)), n: g.n };
+    }
+    const g = this.segs[this.segs.length - 1];
+    return { p: g.b.clone(), n: g.n };
+  }
+
   /** Pieces of the track covering [s0, s1]. */
   window(s0, s1) {
     const out = [];

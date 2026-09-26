@@ -90,6 +90,25 @@ export const sfx = {
   click() {
     tone(660, { type: 'sine', dur: 0.06, vol: 0.12 });
   },
+  boom() {
+    tone(110, { type: 'sine', dur: 0.5, vol: 0.55, slide: 0.3 });
+    tone(55, { type: 'triangle', dur: 0.4, vol: 0.3, slide: 0.5 });
+    noise({ dur: 0.55, vol: 0.4, from: 1200, to: 120, q: 0.5 });
+  },
+  crack() {
+    noise({ dur: 0.09, vol: 0.3, from: 6000, to: 3000, q: 2 });
+    tone(2400, { type: 'square', dur: 0.05, vol: 0.05 });
+    tone(1800, { type: 'triangle', dur: 0.12, vol: 0.1, at: 0.03 });
+  },
+  gold() {
+    tone(1567.98, { type: 'triangle', dur: 0.25, vol: 0.14, at: 0.04 });
+    tone(2093, { type: 'sine', dur: 0.35, vol: 0.1, at: 0.1 });
+  },
+  fever() {
+    [523.25, 659.25, 783.99, 1046.5, 1318.5, 1567.98].forEach((f, i) =>
+      tone(f, { type: 'square', dur: 0.12, vol: 0.07, at: i * 0.05 }));
+    noise({ dur: 0.5, vol: 0.12, from: 500, to: 6000, at: 0.1 });
+  },
   star(i) {
     tone(783.99 * Math.pow(2, (i * 4) / 12), { type: 'triangle', dur: 0.25, vol: 0.2 });
   },
