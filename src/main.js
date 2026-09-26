@@ -3,15 +3,21 @@ import { generate, blockersOf } from './generator.js';
 import { key } from './cube.js';
 import { Track, buildArrowGeometry } from './track.js';
 import { sfx, audio, unlockAudio } from './audio.js';
+import { leaderboardEnabled, submitScore, fetchTop, cleanName, newPlayerId } from './leaderboard.js';
 
 const $ = (id) => document.getElementById(id);
 
 // ---------------------------------------------------------------- persistence
 const SAVE_KEY = 'fozarrows.v1';
-const save = { level: 1, score: 0, hints: 3, stars: {}, sound: true, vibe: true, dark: false };
+const save = { level: 1, score: 0, best: null, hints: 3, stars: {}, sound: true, vibe: true, dark: false, pid: '', name: '' };
 try {
   Object.assign(save, JSON.parse(localStorage.getItem(SAVE_KEY) || '{}'));
 } catch {}
+// Score = sum of the best result on each level, so replays can't farm points.
+if (!save.best) save.best = {};
+if (!save.pid) save.pid = newPlayerId();
+const bestTotal = () => Object.values(save.best).reduce((a, b) => a + b, 0);
+save.score = bestTotal();
 const persist = () => {
   try {
     localStorage.setItem(SAVE_KEY, JSON.stringify(save));
@@ -154,7 +160,8 @@ function startLevel(L) {
 function updateHud(reset) {
   $('level').textContent = 'Level ' + game.level;
   $('left').textContent = game.left;
-  $('score').textContent = save.score.toLocaleString();
+  const live = save.score - (save.best[game.level] || 0) + game.gained;
+  $('score').textContent = Math.max(save.score, live).toLocaleString();
   $('hintCount').textContent = save.hints;
   $('hintBtn').classList.toggle('empty', save.hints <= 0);
   $('progress').style.width = ((1 - game.left / game.total) * 100).toFixed(1) + '%';
@@ -250,7 +257,6 @@ function tryFree(a) {
     game.lastFree = now;
     const mult = Math.min(game.combo, 5);
     const pts = 10 * mult;
-    save.score += pts;
     game.gained += pts;
     sfx.free(game.combo - 1);
     vibrate(8);
@@ -354,12 +360,16 @@ function checkWin() {
   const prev = save.stars[game.level] || 0;
   save.stars[game.level] = Math.max(prev, stars);
   const bonus = 50 * stars + game.level * 5;
-  save.score += bonus;
   game.gained += bonus;
+  const newBest = game.gained > (save.best[game.level] || 0);
+  if (newBest) save.best[game.level] = game.gained;
+  save.score = bestTotal();
   const hintReward = stars === 3 ? 1 : 0;
   save.hints += hintReward;
+  const reachedNew = game.level + 1 > save.level;
   save.level = Math.max(save.level, game.level + 1);
   persist();
+  if (newBest || reachedNew) pushScore();
   sfx.win();
   vibrate([20, 40, 20, 40, 60]);
   confetti();
@@ -391,6 +401,7 @@ function showWin(stars, hintReward) {
         vibrate(15);
       }, 350 + i * 280);
   }
+  renderWinRank();
   $('win').classList.add('show');
   updateHud();
 }
@@ -596,11 +607,23 @@ on('closeSettings', () => $('settings').classList.remove('show'));
 on('restartBtn', () => startLevel(game.level));
 on('resetBtn', () => {
   if (!confirm('Reset all progress?')) return;
-  Object.assign(save, { level: 1, score: 0, hints: 3, stars: {} });
+  Object.assign(save, { level: 1, score: 0, best: {}, hints: 3, stars: {} });
   persist();
   startLevel(1);
 });
 on('nextBtn', () => startLevel(game.level + 1));
+on('lbBtn', openLeaderboard);
+on('lbClose', () => {
+  $('leaderboard').classList.remove('show');
+  if (game.over && game.left === 0) $('win').classList.add('show');
+});
+on('lbSave', saveName);
+on('lbRename', () => {
+  $('lbJoin').hidden = false;
+  $('lbName').focus();
+});
+$('lbName').addEventListener('keydown', (e) => e.key === 'Enter' && saveName());
+$('lbBtn').hidden = !leaderboardEnabled;
 on('replayBtn', () => startLevel(game.level));
 on('retryBtn', () => startLevel(game.level));
 $('soundToggle').addEventListener('change', (e) => {
@@ -611,6 +634,94 @@ $('vibeToggle').addEventListener('change', (e) => {
   save.vibe = e.target.checked;
   persist();
 });
+
+// ---------------------------------------------------------------- leaderboard
+const lb = { rank: null, pending: false, error: false };
+
+function pushScore() {
+  if (!leaderboardEnabled || !save.name) return;
+  lb.pending = true;
+  lb.error = false;
+  submitScore({ id: save.pid, name: save.name, score: save.score, level: save.level })
+    .then((r) => (lb.rank = r.rank))
+    .catch(() => (lb.error = true))
+    .finally(() => {
+      lb.pending = false;
+      renderWinRank();
+    });
+}
+
+function renderWinRank() {
+  const el = $('winRank');
+  if (!leaderboardEnabled) {
+    el.hidden = true;
+    return;
+  }
+  el.hidden = false;
+  if (!save.name) {
+    el.innerHTML = '<span>Join the world ranking 🏆</span>';
+    el.onclick = openLeaderboard;
+  } else if (lb.pending) {
+    el.innerHTML = '<span>Updating ranking…</span>';
+    el.onclick = null;
+  } else if (lb.rank) {
+    el.innerHTML = `<span>🏆 You're <b>#${lb.rank}</b> worldwide</span>`;
+    el.onclick = openLeaderboard;
+  } else {
+    el.innerHTML = '<span>🏆 See the leaderboard</span>';
+    el.onclick = openLeaderboard;
+  }
+}
+
+const esc = (s) => String(s).replace(/[&<>"']/g, (c) => `&#${c.charCodeAt(0)};`);
+
+function openLeaderboard() {
+  hideModals();
+  $('lbName').value = save.name;
+  $('lbJoin').hidden = !!save.name;
+  $('lbList').innerHTML = '<p class="lb-msg">Loading…</p>';
+  $('leaderboard').classList.add('show');
+  loadLeaderboard();
+}
+
+function loadLeaderboard() {
+  fetchTop(save.pid)
+    .then(({ top, me, players }) => {
+      const rows = top.map((r, i) => row(i + 1, r, r.me));
+      if (me && me.rank > top.length) rows.push('<li class="gap">⋯</li>', row(me.rank, { name: save.name, ...me }, true));
+      $('lbList').innerHTML = rows.length
+        ? `<ol>${rows.join('')}</ol><p class="lb-msg">${players} player${players === 1 ? '' : 's'}</p>`
+        : '<p class="lb-msg">No scores yet. Be the first!</p>';
+      $('lbList').querySelector('.me')?.scrollIntoView({ block: 'nearest' });
+    })
+    .catch(() => ($('lbList').innerHTML = '<p class="lb-msg">Couldn\'t load the leaderboard. Check your connection.</p>'));
+}
+
+function row(rank, r, me) {
+  const medal = ['🥇', '🥈', '🥉'][rank - 1] || rank;
+  return `<li class="${me ? 'me' : ''}"><span class="rk">${medal}</span><span class="nm">${esc(r.name)}</span>` +
+    `<span class="lv">Lv ${r.level}</span><span class="sc">${Number(r.score).toLocaleString()}</span></li>`;
+}
+
+function saveName() {
+  const name = cleanName($('lbName').value);
+  if (!name) {
+    bump($('lbName'));
+    return;
+  }
+  save.name = name;
+  persist();
+  $('lbJoin').hidden = true;
+  $('lbList').innerHTML = '<p class="lb-msg">Saving…</p>';
+  lb.pending = true;
+  submitScore({ id: save.pid, name, score: save.score, level: save.level })
+    .then((r) => (lb.rank = r.rank))
+    .catch(() => {})
+    .finally(() => {
+      lb.pending = false;
+      loadLeaderboard();
+    });
+}
 
 // ---------------------------------------------------------------- main loop
 const ease = (t) => 1 - Math.pow(1 - t, 3);

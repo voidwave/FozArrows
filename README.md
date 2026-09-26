@@ -9,6 +9,7 @@ Play: https://voidwave.com/FozArrows/
 - Endless levels. The cubes get bigger (2×2 up to 8×8 per face) and the arrows get longer.
 - Every level can be solved. The generator places arrows in reverse removal order.
 - Combos, stars, hints, sound, haptics, dark mode, and saved progress.
+- A free global leaderboard on Google Sheets. See [leaderboard/README.md](leaderboard/README.md) for the 5-minute setup.
 
 ## Develop
 
