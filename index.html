@@ -207,16 +207,14 @@
   :root[dir="rtl"] #heat .fill { transform-origin: right; background: linear-gradient(-90deg, #ffb84d, #ff6b3d); }
   #heat .lbl { position: absolute; inset: -22px 0 auto; text-align: center; font-weight: 900; font-size: 13px; color: #ff6b3d; opacity: 0; transition: opacity .2s; letter-spacing: .08em; }
   #heat.on { box-shadow: 0 0 18px #ff7a3d; }
-  #heat.on::before { filter: none; animation: flame .4s ease-in-out infinite alternate; }
-  #heat.on .fill { background: linear-gradient(90deg, #ffd43b, #ff6b3d, #f03e3e, #cc5de8); background-size: 200% 100%; animation: flow .6s linear infinite; }
+  #heat.on::before { filter: none; animation: flame 1.2s ease-in-out infinite alternate; }
+  #heat.on .fill { background: linear-gradient(90deg, #ffb84d, #ff7a3d); }
+  :root[dir="rtl"] #heat.on .fill { background: linear-gradient(-90deg, #ffb84d, #ff7a3d); }
   #heat.on .lbl { opacity: 1; }
   @keyframes flame { to { transform: translateY(-60%) scale(1.25) rotate(-8deg); } }
-  @keyframes flow { to { background-position: 200% 0; } }
   #feverFx { position: fixed; inset: 0; pointer-events: none; opacity: 0; transition: opacity .4s;
-    background: radial-gradient(60% 50% at 50% 50%, transparent 40%, rgba(255,120,40,.35) 100%); }
-  body.fever #feverFx { opacity: 1; animation: feverPulse .5s ease-in-out infinite alternate; }
-  @keyframes feverPulse { to { filter: hue-rotate(40deg); transform: scale(1.03); } }
-  .float.ice { color: #3aa0d8; }
+    background: radial-gradient(60% 50% at 50% 50%, transparent 40%, rgba(255,150,60,.22) 100%); }
+  body.fever #feverFx { opacity: .7; }
   .float.boom { color: #f76707; font-size: 34px; -webkit-text-stroke: 1.5px var(--ink); paint-order: stroke fill; }
 
   /* ---------- settings extras */
@@ -241,6 +239,41 @@
   #unsupported[hidden] { display: none; }
   #unsupported div { max-width: 420px; font-weight: 700; line-height: 1.5; }
   #unsupported b { display: block; font-size: 24px; margin-bottom: 8px; }
+
+  /* ---------- hammer, boss timer, toast, chest, achievements */
+  #hammerBtn { position: fixed; inset-inline-end: 16px; top: calc(env(safe-area-inset-top) + 282px); width: 64px; height: 64px; border-radius: 50%;
+    background: var(--panel); border: 1px solid var(--panel-edge); display: grid; place-items: center; font-size: 30px; }
+  #hammerBtn #hammerCount { position: absolute; top: -4px; inset-inline-end: -6px; background: #f08c00; color: #fff; font-weight: 800; font-size: 14px;
+    min-width: 24px; height: 24px; border-radius: 12px; display: grid; place-items: center; padding: 0 6px; border: 2px solid var(--panel); }
+  #hammerBtn.empty #hammerCount { background: var(--heart-off); }
+  #hammerBtn.empty .ic { filter: grayscale(1); opacity: .5; }
+  #hammerBtn.armed { background: #ffe8cc; border-color: #f08c00; box-shadow: 0 0 0 4px rgba(240,140,0,.3); }
+  #hammerBtn.armed .ic { animation: hammer .6s ease-in-out infinite alternate; }
+  @keyframes hammer { from { transform: rotate(10deg) } to { transform: rotate(-25deg) } }
+  #timer { font-size: 17px; color: var(--muted); margin-inline-start: 6px; }
+  #timer.low { color: var(--heart); animation: bump .5s infinite; }
+  #timer[hidden], #chestBtn[hidden] { display: none; }
+  body.boss #leftPill { border-color: #f0b429; }
+  #toast { position: fixed; left: 50%; top: calc(env(safe-area-inset-top) + 10px); transform: translate(-50%, -140%); z-index: 40;
+    display: flex; gap: 12px; align-items: center; background: var(--ink); color: var(--bg); padding: 10px 18px 10px 12px; border-radius: 18px;
+    box-shadow: 0 10px 30px rgba(0,0,0,.25); transition: transform .45s cubic-bezier(.2,1.4,.4,1); pointer-events: none; min-width: 220px; }
+  #toast.show { transform: translate(-50%, 0); }
+  #toast .ic, #achList .ic { font-size: 30px; line-height: 1; }
+  #toast b, #achList b { display: block; font-size: 16px; }
+  #toast small, #achList small { font-size: 13px; opacity: .8; font-weight: 700; }
+  #chestBtn { background: linear-gradient(180deg, #ffc94d, #f59f00); box-shadow: 0 5px 0 #c77c02; color: #3a2620; animation: bump 1.2s ease-in-out infinite; }
+  #chestBtn.open { animation: none; background: var(--bg); box-shadow: none; color: var(--ink); cursor: default; }
+  #achList { list-style: none; margin: 0; padding: 0 0 10px; display: grid; gap: 6px; border-bottom: 1px solid var(--panel-edge); }
+  #achList li { display: flex; gap: 10px; align-items: center; text-align: start; padding: 6px 8px; border-radius: 12px; background: var(--bg); opacity: .5; }
+  #achList li .ic { filter: grayscale(1); }
+  #achList li.got { opacity: 1; }
+  #achList li.got .ic { filter: none; }
+  #achList small { color: var(--muted); }
+  .float.lock { color: #8b5cf6; font-size: 22px; }
+
+  @media (prefers-reduced-motion: reduce) {
+    #stage.shake, #dailyBtn.todo, #heat.on::before, #hammerBtn.armed .ic, #chestBtn, #timer.low { animation: none; }
+  }
 
   @media (min-height: 800px) and (min-width: 600px) {
     #leftPill { top: calc(env(safe-area-inset-top) + 78px); }
@@ -269,7 +302,7 @@
 </header>
 
 <div id="leftPill">
-  <div class="row"><svg viewBox="0 0 24 24"><path d="M5 19 19 5M9 5h10v10"/></svg><span id="left">0</span></div>
+  <div class="row"><svg viewBox="0 0 24 24"><path d="M5 19 19 5M9 5h10v10"/></svg><span id="left">0</span><span id="timer" hidden></span></div>
   <div class="bar"><div id="progress"></div></div>
 </div>
 
@@ -294,6 +327,9 @@
 
 <button id="dailyBtn" data-i18n-aria="daily"><svg class="cal" viewBox="0 0 36 36"><rect x="3" y="6" width="30" height="27" rx="6" fill="#fff" stroke="currentColor" stroke-width="2"/><path d="M3 12a6 6 0 0 1 6-6h18a6 6 0 0 1 6 6v3H3Z" fill="#e5484d" stroke="currentColor" stroke-width="2"/><path d="M11 3v6M25 3v6" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"/><text id="dailyDay" x="18" y="29" text-anchor="middle" font-size="14" font-weight="800" fill="#3a2620">1</text></svg><small id="dailyStreak">!</small></button>
 
+<button id="hammerBtn" aria-label="Hammer"><span class="ic">🔨</span><span id="hammerCount">2</span></button>
+<div id="toast"></div>
+
 <div id="heat"><div class="fill" id="heatFill"></div><div class="lbl" data-i18n="feverShort"></div></div>
 
 <div id="tip"></div>
@@ -310,6 +346,7 @@
     <div id="winStats"></div>
     <p id="winReward"></p>
     <p id="winUnlock" hidden></p>
+    <button class="btn" id="chestBtn" hidden></button>
     <div id="winRank" hidden></div>
     <button class="btn" id="shareBtn" data-i18n="share" hidden></button>
     <button class="btn" id="nextBtn"></button>
@@ -319,7 +356,7 @@
 
 <div class="modal" id="lose">
   <div class="card">
-    <h2 data-i18n="loseTitle"></h2>
+    <h2 id="loseTitle" data-i18n="loseTitle"></h2>
     <p id="loseText"></p>
     <button class="btn" id="retryBtn" data-i18n="retry"></button>
   </div>
@@ -350,6 +387,8 @@
     </div>
     <div class="skins-head"><span data-i18n="style" style="color:inherit"></span><span id="skinStars"></span></div>
     <div id="skins"></div>
+    <div class="skins-head"><span data-i18n="achTitle" style="color:inherit"></span><span id="achCount"></span></div>
+    <ul id="achList"></ul>
     <div class="howto" data-i18n-html="howto"></div>
     <button class="btn" id="closeSettings" data-i18n="resume"></button>
     <button class="btn ghost" id="restartBtn" data-i18n="restart"></button>

@@ -8,8 +8,12 @@ Play: https://voidwave.com/FozArrows/
 
 - Endless levels. The cubes get bigger (2×2 up to 8×8 per face) and the arrows get longer.
 - Every level can be solved. The generator places arrows in reverse removal order.
-- Special arrows: ✨ golden (triple points), ❄️ frozen (tap once to crack the ice), and 💣 bombs (blast neighbouring arrows, and can set off chains).
-- 🔥 Fever: free 8 arrows in quick succession for double points. A mistake ends it.
+- Special arrows: ✨ golden (triple points), 💣 bombs (blast neighbouring arrows, and can set off chains), and 🔒🔑 lock-and-key pairs (a locked arrow opens once its matching key arrow is freed).
+- 🔨 Hammer power-up: smash any arrow when you're stuck.
+- 👑 Boss levels: every 10th level is against the clock.
+- 🎁 Gift chests every third level and after each boss, with extra hints or hammers.
+- 🏅 Ten achievements, each worth a bonus hint.
+- 🔥 Fever: free 8 arrows in quick succession for double points, shown with a calm warm glow. A mistake ends it.
 - 📅 Daily Challenge: the same puzzle for everyone each day, with a streak counter and a share button.
 - 🎨 Six cube styles, unlocked by collecting stars.
 - English and Arabic (عربي), with a right-to-left layout and Arabic numerals. Arabic is picked automatically on Arabic-language phones.
