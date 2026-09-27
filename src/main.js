@@ -1,7 +1,7 @@
 import * as THREE from 'three';
 import { generate, blockersOf } from './generator.js';
 import { key } from './cube.js';
-import { mulberry32 } from './rng.js';
+import { assignKinds } from './specials.js';
 import { Track, buildArrowGeometry } from './track.js';
 import { sfx, audio, unlockAudio } from './audio.js';
 import { leaderboardEnabled, submitScore, fetchTop, cleanName, newPlayerId } from './leaderboard.js';
@@ -13,7 +13,7 @@ const $ = (id) => document.getElementById(id);
 const SAVE_KEY = 'fozarrows.v1';
 const save = {
   level: 1, score: 0, best: null, hints: 3, stars: {}, sound: true, vibe: true, dark: false,
-  pid: '', name: '', lang: '', skin: 'classic', daily: null,
+  pid: '', name: '', lang: '', skin: 'classic', daily: null, hammers: 2, ach: null, counters: null,
 };
 try {
   Object.assign(save, JSON.parse(localStorage.getItem(SAVE_KEY) || '{}'));
@@ -22,6 +22,9 @@ try {
 if (!save.best) save.best = {};
 if (!save.pid) save.pid = newPlayerId();
 if (!save.daily) save.daily = { last: '', streak: 0, done: {} };
+if (!save.ach) save.ach = {};
+if (!save.counters) save.counters = {};
+if (save.hammers == null) save.hammers = 2;
 const bestTotal = () => Object.values(save.best).reduce((a, b) => a + b, 0);
 const starTotal = () => Object.values(save.stars).reduce((a, b) => a + b, 0);
 save.score = bestTotal();
@@ -60,28 +63,6 @@ const currentStreak = () => {
   const d = save.daily;
   return d.last === dayKey() || d.last === yesterdayKey() ? d.streak : 0;
 };
-
-/** Gives some arrows special powers, deterministically per level. */
-function assignKinds(arrows, L, seed) {
-  const rng = mulberry32(seed ^ 0x5bd1e995);
-  const pGold = L >= 3 ? 0.07 : 0;
-  const pIce = L >= 6 ? 0.1 : 0;
-  const pBomb = L >= 8 ? 0.05 : 0;
-  const maxBombs = Math.max(1, Math.floor(arrows.length / 14));
-  let bombs = 0;
-  for (const a of arrows) {
-    const r = rng();
-    if (r < pBomb && bombs < maxBombs) {
-      a.kind = 'bomb';
-      bombs++;
-    } else if (r < pBomb + pIce) a.kind = 'ice';
-    else if (r < pBomb + pIce + pGold) a.kind = 'gold';
-    else a.kind = 'normal';
-  }
-  // Make sure the level that introduces a special arrow actually has one.
-  const intro = { 3: 'gold', 6: 'ice', 8: 'bomb' }[L];
-  if (intro && !arrows.some((a) => a.kind === intro)) arrows[Math.floor(rng() * arrows.length)].kind = intro;
-}
 
 // ---------------------------------------------------------------- themes & skins
 const THEMES = {
@@ -134,7 +115,6 @@ const mats = {
   hint: lambert(0x22c55e, 0.3),
   error: lambert(0xe5484d, 0.25),
   gold: lambert(0xffc800, 0.4),
-  ice: lambert(0x74c8f2, 0.3),
   bomb: lambert(0xf76707, 0.3),
   bombCore: new THREE.MeshBasicMaterial({ color: 0x241a17 }),
   bombRing: new THREE.MeshBasicMaterial({ color: 0xf76707 }),
@@ -144,10 +124,59 @@ for (const m of Object.values(mats)) {
   m.polygonOffsetFactor = -2;
   m.polygonOffsetUnits = -2;
 }
-const baseMat = (a) => (a.ice ? mats.ice : a.data.kind === 'gold' ? mats.gold : a.data.kind === 'bomb' ? mats.bomb : mats.arrow);
+// Lock/key pairs share a colour so players can match them.
+const PAIR_COLORS = [0x8b5cf6, 0x0d9488, 0xdb2777];
+const pairMats = PAIR_COLORS.map((c) => lambert(c, 0.25));
+const pairFlat = PAIR_COLORS.map((c) => new THREE.MeshBasicMaterial({ color: c }));
+for (const m of [...pairMats, ...pairFlat]) {
+  m.polygonOffset = true;
+  m.polygonOffsetFactor = -2;
+  m.polygonOffsetUnits = -2;
+}
+const sharedMats = new Set([...Object.values(mats), ...pairMats, ...pairFlat]);
+const baseMat = (a) => {
+  const k = a.data.kind;
+  if (k === 'gold') return mats.gold;
+  if (k === 'bomb') return mats.bomb;
+  if (k === 'key' || (k === 'lock' && !a.open)) return pairMats[a.data.pair];
+  return mats.arrow;
+};
 const ringGeom = new THREE.CircleGeometry(0.3, 24);
 const coreGeom = new THREE.CircleGeometry(0.19, 20);
-const sharedGeoms = new Set([ringGeom, coreGeom]);
+const plateGeom = new THREE.PlaneGeometry(0.5, 0.5);
+const holeGeom = new THREE.CircleGeometry(0.09, 16);
+const slotGeom = new THREE.PlaneGeometry(0.07, 0.16);
+const keyGeom = new THREE.RingGeometry(0.12, 0.25, 24);
+const sharedGeoms = new Set([ringGeom, coreGeom, plateGeom, holeGeom, slotGeom, keyGeom]);
+
+/** Small badge on an arrow's tail: a bomb, a padlock or a key ring. */
+function makeMarker(a) {
+  const k = a.data.kind;
+  const g = new THREE.Group();
+  const add = (geom, mat, x = 0, y = 0, z = 0) => {
+    const m = new THREE.Mesh(geom, mat);
+    m.position.set(x, y, z);
+    g.add(m);
+  };
+  if (k === 'bomb') {
+    add(ringGeom, mats.bombRing);
+    add(coreGeom, mats.bombCore, 0, 0, 0.004);
+  } else if (k === 'lock') {
+    add(plateGeom, pairFlat[a.data.pair]);
+    add(holeGeom, mats.bombCore, 0, 0.04, 0.004);
+    add(slotGeom, mats.bombCore, 0, -0.05, 0.004);
+  } else if (k === 'key') {
+    add(keyGeom, pairFlat[a.data.pair]);
+  } else return null;
+  cube.add(g);
+  return g;
+}
+function dropMarker(a, sparkle) {
+  if (!a.marker) return;
+  if (sparkle) burst(a.marker.position.clone(), new THREE.Vector3(0, 0, 0), a.mesh.material.color, 8, 0.8);
+  cube.remove(a.marker);
+  a.marker = null;
+}
 
 function faceTexture(N) {
   const col = cubeColors();
@@ -182,7 +211,7 @@ function disposeLevel() {
   if (!game) return;
   cube.traverse((o) => {
     if (o.geometry && o.geometry !== particleGeom && !sharedGeoms.has(o.geometry)) o.geometry.dispose();
-    if (o.material && !Object.values(mats).includes(o.material)) {
+    if (o.material && !sharedMats.has(o.material)) {
       if (o.material.map) o.material.map.dispose();
       o.material.dispose();
     }
@@ -191,15 +220,16 @@ function disposeLevel() {
   particles.length = 0;
 }
 
+const isBoss = (L) => L % 10 === 0;
 function startLevel(L) {
-  startGame({ mode: 'level', level: L, cfg: levelConfig(L) });
+  startGame({ mode: 'level', level: L, cfg: levelConfig(L), boss: isBoss(L) });
 }
 function startDaily() {
   startGame({ mode: 'daily', level: 30, cfg: dailyConfig() });
 }
 const restart = () => (game.mode === 'daily' ? startDaily() : startLevel(game.level));
 
-function startGame({ mode, level: L, cfg }) {
+function startGame({ mode, level: L, cfg, boss = false }) {
   disposeLevel();
   hideModals();
   endFever(true);
@@ -219,19 +249,11 @@ function startGame({ mode, level: L, cfg }) {
   const occ = new Map();
   const arrows = puzzle.arrows.map((data) => {
     const track = new Track(data, N);
-    const a = { data, track, state: 'idle', s: 0, v: 0, flash: 0, ice: data.kind === 'ice' };
+    const a = { data, track, state: 'idle', s: 0, v: 0, flash: 0 };
     a.mesh = new THREE.Mesh(buildArrowGeometry(track, 0, track.bodyLen, new THREE.BufferGeometry()), baseMat(a));
     cube.add(a.mesh);
-    if (data.kind === 'bomb') {
-      // A little bomb sits on the arrow's tail.
-      a.marker = new THREE.Group();
-      const ring = new THREE.Mesh(ringGeom, mats.bombRing);
-      const core = new THREE.Mesh(coreGeom, mats.bombCore);
-      core.position.z = 0.004;
-      a.marker.add(ring, core);
-      cube.add(a.marker);
-      placeMarker(a);
-    }
+    a.marker = makeMarker(a);
+    if (a.marker) placeMarker(a);
     for (const c of data.cells) occ.set(key(c.p), data.id);
     return a;
   });
@@ -241,7 +263,8 @@ function startGame({ mode, level: L, cfg }) {
     total: arrows.length, left: arrows.length,
     hearts: 3, mistakes: 0, combo: 0, lastFree: 0, gained: 0,
     hinted: null, over: false, started: performance.now(),
-    intro: 0, blasts: [],
+    intro: 0, blasts: [], hammer: false,
+    boss, timeLeft: boss ? Math.round(40 + arrows.length * 2.5) : 0, lastTick: 0,
   };
   cube.quaternion.copy(ISO).multiply(new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 1, 0), -2.2));
   rot.from = cube.quaternion.clone();
@@ -255,6 +278,9 @@ function startGame({ mode, level: L, cfg }) {
   updateHud(true);
   showTutorial(mode === 'level' ? L : 0);
   renderDailyBtn();
+  $('timer').hidden = !boss;
+  document.body.classList.toggle('boss', boss);
+  if (boss) setTimeout(() => shout(t('bossShout')), 500);
 }
 
 const zAxis = new THREE.Vector3(0, 0, 1);
@@ -275,6 +301,7 @@ function updateHud(reset) {
   $('score').textContent = fmt(shown);
   $('hintCount').textContent = fmt(save.hints);
   $('hintBtn').classList.toggle('empty', save.hints <= 0);
+  renderHammer();
   $('progress').style.width = ((1 - game.left / game.total) * 100).toFixed(1) + '%';
   const hearts = $('hearts').children;
   for (let i = 0; i < hearts.length; i++) {
@@ -292,7 +319,7 @@ function bump(el) {
 
 function showTutorial(L) {
   const el = $('tip');
-  const has = L >= 1 && L <= 8;
+  const has = [1, 2, 3, 4, 5, 7, 8, 9, 10, 11].includes(L);
   el.classList.toggle('show', has);
   if (has) el.textContent = t('tut' + L);
 }
@@ -355,16 +382,28 @@ function award(a, at) {
 function tryFree(a) {
   if (game.over || a.state !== 'idle') return;
   unlockAudio();
+  if (game.hammer) {
+    smash(a);
+    return;
+  }
   if (game.hinted === a) clearHint();
 
-  if (a.ice) {
-    a.ice = false;
-    a.mesh.material = baseMat(a);
-    const h = headOf(a);
-    for (const c of a.data.cells) burst(cellLocal(c.p), cellLocal(h.n).multiplyScalar(2), 0xcfeeff, 3, 0.7);
-    floatText(t('crack'), headWorld(a), 'ice');
-    sfx.crack();
-    vibrate(15);
+  if (a.data.kind === 'lock' && !a.open) {
+    // Rattle the padlock and point at the key. It's visible information, so no heart is lost.
+    a.state = 'bump';
+    a.s = 0;
+    a.phase = 1;
+    a.bumpTo = 0.15;
+    const k = game.arrows[a.data.keyId];
+    if (k.state === 'idle') {
+      k.mesh.material = mats.hint;
+      k.flash = 0.8;
+    }
+    game.combo = 0;
+    $('comboBadge').classList.remove('show');
+    floatText(t('locked'), headWorld(a), 'lock');
+    sfx.locked();
+    vibrate(25);
     return;
   }
 
@@ -383,6 +422,7 @@ function tryFree(a) {
     game.combo = now - game.lastFree < 1600 ? game.combo + 1 : 1;
     game.lastFree = now;
     award(a, headWorld(a));
+    left(a);
     sfx.free(game.combo - 1);
     vibrate(8);
     if (game.combo >= 2) {
@@ -392,6 +432,7 @@ function tryFree(a) {
     }
     if (game.fever > 0) game.fever = Math.min(8, game.fever + 0.5);
     else if (game.combo >= 8) startFever();
+    if (game.combo >= 20) achieve('combo20');
     const praise = { 5: 1, 10: 1, 15: 1, 20: 1, 30: 1 }[game.combo];
     if (praise && game.combo !== 8) shout(t('praise' + game.combo));
     if (a.data.kind === 'bomb') explode(a);
@@ -427,10 +468,7 @@ function tryFree(a) {
 
 /** A freed bomb blows up every arrow touching its body; bombs set off chains. */
 function explode(bomb) {
-  if (bomb.marker) {
-    cube.remove(bomb.marker);
-    bomb.marker = null;
-  }
+  dropMarker(bomb);
   const cells = bomb.data.cells.map((c) => c.p);
   const victims = new Set();
   for (const [k, id] of game.occ) {
@@ -454,13 +492,82 @@ function explode(bomb) {
     v.mesh.material.transparent = true;
     game.left--;
     award(v, headWorld(v));
+    left(v);
     for (const c of v.data.cells) burst(cellLocal(c.p), cellLocal(c.n).multiplyScalar(2), v.mesh.material.color, 3, 1.2);
-    if (v.data.kind === 'bomb') game.blasts.push({ a: v, t: 0.18 });
+    if (v.data.kind === 'bomb') {
+      game.blasts.push({ a: v, t: 0.18 });
+      achieve('chain');
+    }
   }
+}
+
+/** Called whenever an arrow leaves the cube, however it left. */
+function left(a) {
+  if (a.data.kind === 'key') {
+    dropMarker(a, true);
+    const lock = game.arrows[a.data.lockId];
+    if (lock.state === 'idle' || lock.state === 'bump') {
+      lock.open = true;
+      dropMarker(lock, true);
+      if (sharedMats.has(lock.mesh.material)) lock.mesh.material = baseMat(lock);
+      floatText(t('unlocked'), headWorld(lock), 'lock');
+      sfx.unlock();
+      save.counters.locks = (save.counters.locks || 0) + 1;
+      if (save.counters.locks >= 10) achieve('locks');
+    }
+  }
+}
+
+function toggleHammer() {
+  if (!game || game.over) return;
+  if (game.hammer) {
+    game.hammer = false;
+    $('tip').classList.remove('show');
+  } else if (save.hammers <= 0) {
+    bump($('hammerBtn'));
+    return;
+  } else {
+    game.hammer = true;
+    $('tip').textContent = t('hammerTip');
+    $('tip').classList.add('show');
+  }
+  renderHammer();
+}
+
+function renderHammer() {
+  $('hammerCount').textContent = fmt(save.hammers);
+  $('hammerBtn').classList.toggle('armed', !!game?.hammer);
+  $('hammerBtn').classList.toggle('empty', save.hammers <= 0);
+}
+
+/** The hammer smashes any arrow, blocked or locked. No points, no penalty. */
+function smash(a) {
+  game.hammer = false;
+  save.hammers--;
+  persist();
+  $('tip').classList.remove('show');
+  if (game.hinted === a) clearHint();
+  for (const c of a.data.cells) game.occ.delete(key(c.p));
+  a.state = 'pop';
+  a.t = 0;
+  a.mesh.material = baseMat(a).clone();
+  a.mesh.material.transparent = true;
+  game.left--;
+  for (const c of a.data.cells) burst(cellLocal(c.p), cellLocal(c.n).multiplyScalar(2), a.mesh.material.color, 6, 1.4);
+  floatText(t('smash'), headWorld(a), 'boom');
+  sfx.smash();
+  vibrate([30, 20, 70]);
+  shake();
+  left(a);
+  if (a.data.kind === 'bomb') explode(a);
+  else dropMarker(a);
+  achieve('hammer');
+  updateHud();
 }
 
 function startFever() {
   game.fever = 6;
+  achieve('fever');
   document.body.classList.add('fever');
   shout(t('fever'));
   sfx.fever();
@@ -499,7 +606,9 @@ function useHint() {
     sfx.click();
     return;
   }
-  const free = game.arrows.filter((a) => a.state === 'idle' && !blockersOf(a.data, game.occ, game.N));
+  const free = game.arrows.filter(
+    (a) => a.state === 'idle' && !(a.data.kind === 'lock' && !a.open) && !blockersOf(a.data, game.occ, game.N),
+  );
   if (!free.length) return;
   // Prefer an arrow that already faces the player.
   const facing = (a) => new THREE.Vector3(...headOf(a).n).applyQuaternion(cube.quaternion).z;
@@ -528,7 +637,9 @@ function checkWin() {
   if (game.arrows.some((a) => a.state === 'exit' || a.state === 'pop')) return;
   game.over = true;
   endFever();
+  game.hammer = false;
   const stars = Math.max(1, 3 - game.mistakes);
+  let chest = null;
   const secs = Math.round((performance.now() - game.started) / 1000);
   const starsBefore = starTotal();
   const hintReward = stars === 3 ? 1 : 0;
@@ -553,7 +664,20 @@ function checkWin() {
     const reachedNew = game.level + 1 > save.level;
     save.level = Math.max(save.level, game.level + 1);
     if (newBest || reachedNew) pushScore();
+    achieve('first');
+    if (game.boss) achieve('boss');
+    if (Object.values(save.stars).filter((v) => v === 3).length >= 10) achieve('flawless10');
+    if (save.level >= 25) achieve('level25');
+    // A gift every third new level, and always after a boss.
+    if (game.boss || (reachedNew && game.level % 3 === 0)) {
+      const r = Math.random();
+      chest = r < 0.4 ? { hints: 1 } : r < 0.75 ? { hammers: 1 } : r < 0.92 ? { hints: 2 } : { hammers: 2 };
+      if (game.boss) for (const k in chest) chest[k] *= 2;
+      save.hints += chest.hints || 0;
+      save.hammers += chest.hammers || 0;
+    }
   }
+  if (game.mode === 'daily' && currentStreak() >= 7) achieve('streak7');
   persist();
   const unlocked = SKINS.find((s) => s.stars > starsBefore && s.stars <= starTotal());
   sfx.win();
@@ -561,7 +685,7 @@ function checkWin() {
   confetti();
   shout(t('win' + stars));
   spin.x = 700;
-  setTimeout(() => showWin(stars, secs, hintReward, unlocked), 900);
+  setTimeout(() => showWin(stars, secs, hintReward, unlocked, chest), 900);
 }
 
 // ---------------------------------------------------------------- modals
@@ -569,7 +693,7 @@ function hideModals() {
   document.querySelectorAll('.modal').forEach((m) => m.classList.remove('show'));
 }
 
-function showWin(stars, secs, hintReward, unlocked) {
+function showWin(stars, secs, hintReward, unlocked, chest) {
   const daily = game.mode === 'daily';
   $('winTitle').textContent = t('win' + stars);
   $('winStats').innerHTML =
@@ -583,6 +707,19 @@ function showWin(stars, secs, hintReward, unlocked) {
   if (unlocked) $('winUnlock').textContent = t('newSkin', { name: t('skin_' + unlocked.id) });
   $('nextBtn').textContent = daily ? t('continueLevels') : t('next');
   $('shareBtn').hidden = !daily;
+  const cb = $('chestBtn');
+  cb.hidden = !chest;
+  cb.classList.remove('open');
+  cb.disabled = false;
+  cb.textContent = t('chestTap');
+  cb.onclick = () => {
+    cb.classList.add('open');
+    cb.disabled = true;
+    cb.textContent = chest.hints ? t('chestHint', { n: chest.hints }) : t('chestHammer', { n: chest.hammers });
+    sfx.chest();
+    vibrate([15, 30, 15, 30, 40]);
+    confetti(30);
+  };
   game.lastWin = { stars, secs };
   const starEls = $('stars').children;
   for (let i = 0; i < 3; i++) {
@@ -613,16 +750,19 @@ async function shareDaily() {
   } catch {}
 }
 
-function showLose() {
+function showLose(timeUp) {
   sfx.lose();
   const freed = game.total - game.left;
-  $('loseText').textContent = t('loseText', { a: freed, b: game.total, p: Math.round((freed / game.total) * 100) });
+  $('loseTitle').textContent = t(timeUp ? 'timeUp' : 'loseTitle');
+  $('loseText').textContent = timeUp
+    ? t('timeUpText', { a: freed, b: game.total })
+    : t('loseText', { a: freed, b: game.total, p: Math.round((freed / game.total) * 100) });
   $('lose').classList.add('show');
 }
 
-function confetti() {
+function confetti(count = 90) {
   const colors = ['#f0b429', '#e5484d', '#3e9bff', '#46c37b', '#a26bfa', '#ff8a3d'];
-  for (let i = 0; i < 90; i++) {
+  for (let i = 0; i < count; i++) {
     const el = document.createElement('i');
     el.className = 'confetti';
     el.style.left = Math.random() * 100 + 'vw';
@@ -640,7 +780,7 @@ function confetti() {
 function renderDailyBtn() {
   const done = !!save.daily.done[dayKey()];
   const streak = currentStreak();
-  $('dailyStreak').textContent = done ? '✓' : streak ? '🔥' + fmt(streak) : '!';
+  $('dailyStreak').textContent = done ? '✓ ' + t('daily') : streak ? '🔥' + fmt(streak) + ' ' + t('daily') : t('daily');
   $('dailyDay').textContent = fmt(new Date().getDate());
   $('dailyBtn').classList.toggle('todo', !done);
   $('dailyBtn').classList.toggle('active', game?.mode === 'daily');
@@ -669,6 +809,45 @@ function pickSkin(id) {
   persist();
   applyTheme();
   renderSkins();
+}
+
+// ---------------------------------------------------------------- achievements
+const ACHIEVEMENTS = [
+  ['first', '🎯'], ['fever', '🌡️'], ['combo20', '🔥'], ['chain', '💥'], ['hammer', '🔨'],
+  ['boss', '👑'], ['locks', '🔓'], ['flawless10', '⭐'], ['streak7', '💪'], ['level25', '🧊'],
+];
+const toasts = [];
+function achieve(id) {
+  if (save.ach[id]) return;
+  save.ach[id] = true;
+  save.hints++;
+  persist();
+  toasts.push(id);
+  if (toasts.length === 1) showToast();
+  if (game) updateHud();
+}
+function showToast() {
+  const id = toasts[0];
+  if (!id) return;
+  const icon = ACHIEVEMENTS.find((a) => a[0] === id)[1];
+  const el = $('toast');
+  el.innerHTML = `<span class="ic">${icon}</span><span><b>${t('ach_' + id)}</b><small>${t('achReward')}</small></span>`;
+  el.classList.add('show');
+  sfx.achieve();
+  setTimeout(() => {
+    el.classList.remove('show');
+    setTimeout(() => {
+      toasts.shift();
+      showToast();
+    }, 400);
+  }, 2600);
+}
+function renderAchievements() {
+  const got = ACHIEVEMENTS.filter(([id]) => save.ach[id]).length;
+  $('achCount').textContent = fmt(got) + ' / ' + fmt(ACHIEVEMENTS.length);
+  $('achList').innerHTML = ACHIEVEMENTS.map(([id, icon]) =>
+    `<li class="${save.ach[id] ? 'got' : ''}"><span class="ic">${icon}</span><span><b>${t('ach_' + id)}</b><small>${t('achd_' + id)}</small></span></li>`,
+  ).join('');
 }
 
 // ---------------------------------------------------------------- camera & rotation
@@ -830,6 +1009,7 @@ function applyLang(l) {
   setLang(l);
   document.querySelectorAll('[data-lang]').forEach((b) => b.classList.toggle('sel', b.dataset.lang === lang));
   renderSkins();
+  renderAchievements();
   if (game) {
     updateHud();
     renderWinRank();
@@ -849,6 +1029,7 @@ on('themeBtn', () => {
   applyTheme();
 });
 on('hintBtn', useHint);
+on('hammerBtn', toggleHammer);
 on('viewBtn', () => animateTo(ISO));
 on('dailyBtn', () => (game.mode === 'daily' ? animateTo(ISO) : startDaily()));
 on('settingsBtn', () => {
@@ -856,13 +1037,17 @@ on('settingsBtn', () => {
   $('vibeToggle').checked = save.vibe;
   document.querySelectorAll('[data-lang]').forEach((b) => b.classList.toggle('sel', b.dataset.lang === lang));
   renderSkins();
+  renderAchievements();
   $('settings').classList.add('show');
 });
 on('closeSettings', () => $('settings').classList.remove('show'));
 on('restartBtn', restart);
 on('resetBtn', () => {
   if (!confirm(t('resetConfirm'))) return;
-  Object.assign(save, { level: 1, score: 0, best: {}, hints: 3, stars: {}, skin: 'classic', daily: { last: '', streak: 0, done: {} } });
+  Object.assign(save, {
+    level: 1, score: 0, best: {}, hints: 3, hammers: 2, stars: {}, skin: 'classic',
+    daily: { last: '', streak: 0, done: {} }, ach: {}, counters: {},
+  });
   persist();
   applyTheme();
   startLevel(1);
@@ -1015,14 +1200,12 @@ function frame(now) {
     cube.scale.setScalar(0.6 + 0.4 * ease(introT));
     mats.hint.emissiveIntensity = 0.3 + 0.3 * Math.sin(pulse * 8);
     mats.gold.emissiveIntensity = 0.3 + 0.15 * Math.sin(pulse * 5);
-    mats.bombRing.color.setHSL(0.07, 1, 0.5 + 0.12 * Math.sin(pulse * 10));
+    mats.bombRing.color.setHSL(0.07, 1, 0.5 + 0.1 * Math.sin(pulse * 4));
 
     // Fever timer and heat meter.
     const heat = $('heat');
     if (game.fever > 0) {
       game.fever -= dt;
-      mats.arrow.emissive.setHSL((pulse * 0.6) % 1, 1, 0.5);
-      mats.arrow.emissiveIntensity = 0.35;
       heat.classList.add('on');
       $('heatFill').style.transform = `scaleX(${Math.max(0, game.fever / 8)})`;
       if (game.fever <= 0) endFever();
@@ -1030,6 +1213,23 @@ function frame(now) {
       heat.classList.remove('on');
       const warm = now - game.lastFree < 1600 && !game.over ? Math.min(game.combo, 8) / 8 : 0;
       $('heatFill').style.transform = `scaleX(${warm})`;
+    }
+
+    if (game.boss && !game.over && game.left > 0 && introT >= 1) {
+      game.timeLeft = Math.max(0, game.timeLeft - dt);
+      const secs = Math.ceil(game.timeLeft);
+      $('timer').textContent = '👑 ' + fmtTime(secs);
+      $('timer').classList.toggle('low', secs <= 10);
+      if (secs <= 10 && secs !== game.lastTick && secs > 0) sfx.tick();
+      game.lastTick = secs;
+      if (game.timeLeft <= 0) {
+        game.over = true;
+        game.hammer = false;
+        endFever();
+        sfx.block();
+        shake();
+        setTimeout(() => showLose(true), 600);
+      }
     }
 
     for (let i = game.blasts.length - 1; i >= 0; i--) {

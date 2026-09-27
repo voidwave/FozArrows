@@ -35,3 +35,34 @@ for (let seed = 1; seed <= 300; seed++) {
   cells += seen.size / (6 * N * N);
 }
 console.log('ok: avg arrows', (total / 300).toFixed(1), 'avg coverage', (cells / 300).toFixed(2));
+
+// Special arrows: with lock/key constraints every level must still be solvable.
+import { assignKinds } from '../src/specials.js';
+import { blockersOf } from '../src/generator.js';
+let lockLevels = 0;
+for (let L = 1; L <= 80; L++) {
+  const N = L === 1 ? 2 : L <= 4 ? 3 : L <= 9 ? 4 : L <= 16 ? 5 : L <= 26 ? 6 : L <= 40 ? 7 : 8;
+  const seed = L * 7919 + 1013;
+  const pz = generate({ N, seed, maxLen: 6 });
+  assignKinds(pz.arrows, L, seed);
+  const locks = pz.arrows.filter((a) => a.kind === 'lock');
+  for (const l of locks) assert.ok(pz.arrows[l.keyId].id > l.id && pz.arrows[l.keyId].kind === 'key');
+  if (locks.length) lockLevels++;
+  const occ = new Map();
+  for (const a of pz.arrows) for (const c of a.cells) occ.set(key(c.p), a.id);
+  const left = new Set(pz.arrows.map((a) => a.id));
+  let progress = true;
+  while (left.size && progress) {
+    progress = false;
+    for (const id of left) {
+      const a = pz.arrows[id];
+      if (a.kind === 'lock' && left.has(a.keyId)) continue;
+      if (blockersOf(a, occ, N)) continue;
+      for (const c of a.cells) occ.delete(key(c.p));
+      left.delete(id);
+      progress = true;
+    }
+  }
+  assert.equal(left.size, 0, 'level ' + L + ' not solvable with locks');
+}
+console.log('ok: specials, levels with locks:', lockLevels);
