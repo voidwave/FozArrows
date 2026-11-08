@@ -3,14 +3,11 @@
   "version": "1.0.0",
   "private": true,
   "type": "module",
-  "description": "Rotate the cube, free the arrows.",
+  "description": "Free every arrow from the maze.",
   "scripts": {
-    "build": "esbuild src/main.js --bundle --minify --format=esm --target=es2020,safari15 --outfile=dist/game.js",
-    "dev": "esbuild src/main.js --bundle --format=esm --target=es2020,safari15 --outfile=dist/game.js --servedir=. --watch",
+    "build": "esbuild src/main.js --bundle --minify --format=esm --target=es2019,safari13 --outfile=dist/game.js",
+    "dev": "esbuild src/main.js --bundle --format=esm --target=es2019,safari13 --outfile=dist/game.js --servedir=. --watch",
     "test": "node test/generator.test.mjs"
-  },
-  "dependencies": {
-    "three": "^0.186.1"
   },
   "devDependencies": {
     "esbuild": "^0.25.0"

@@ -15,7 +15,8 @@ const TOP_N = 50;
 const CACHE_SECONDS = 20;
 const MIN_SECONDS_BETWEEN_SUBMITS = 3;
 
-// Must match levelConfig() in src/main.js: cube size N for a level.
+// Must match levelMax() in src/levels.js. (N was the cube size in the original 3D version;
+// the formula is kept so deployed copies of this script keep accepting scores.)
 function levelN_(L) {
   return L === 1 ? 2 : L <= 4 ? 3 : L <= 9 ? 4 : L <= 16 ? 5 : L <= 26 ? 6 : L <= 40 ? 7 : 8;
 }

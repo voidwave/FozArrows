@@ -38,5 +38,5 @@ This keeps the same URL. "New deployment" gives you a different URL.
 - Scores are checked against the most a player could possibly score for the level
   they've reached. Replaying a level only counts your best result. A determined
   cheater can still post a fake-but-plausible score. Delete their row in the sheet.
-- If you change level sizes in `levelConfig()` (`src/main.js`), update `levelN_()`
+- The per-level score cap lives in `levelMax()` (`src/levels.js`). If you change it, update `maxScore_()`
   in `Code.gs` to match.
