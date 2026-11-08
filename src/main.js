@@ -1,11 +1,9 @@
-import * as THREE from 'three';
-import { generate, blockersOf } from './generator.js';
-import { key } from './cube.js';
-import { assignKinds } from './specials.js';
-import { Track, buildArrowGeometry } from './track.js';
+import { generate, blockersOf } from './grid.js';
+import { levelConfig, levelMax } from './levels.js';
+import { Path } from './path.js';
 import { sfx, audio, unlockAudio } from './audio.js';
 import { leaderboardEnabled, submitScore, fetchTop, cleanName, newPlayerId } from './leaderboard.js';
-import { t, fmt, fmtTime, setLang, detectLang, lang } from './i18n.js';
+import { t, fmt, fmtPlain, fmtTime, setLang, detectLang, lang } from './i18n.js';
 
 const $ = (id) => document.getElementById(id);
 
@@ -13,7 +11,7 @@ const $ = (id) => document.getElementById(id);
 const SAVE_KEY = 'fozarrows.v1';
 const save = {
   level: 1, score: 0, best: null, hints: 3, stars: {}, sound: true, vibe: true, dark: false,
-  pid: '', name: '', lang: '', skin: 'classic', daily: null, hammers: 2, ach: null, counters: null,
+  pid: '', name: '', lang: '', palette: 'classic', daily: null, ach: null,
 };
 try {
   Object.assign(save, JSON.parse(localStorage.getItem(SAVE_KEY) || '{}'));
@@ -23,8 +21,6 @@ if (!save.best) save.best = {};
 if (!save.pid) save.pid = newPlayerId();
 if (!save.daily) save.daily = { last: '', streak: 0, done: {} };
 if (!save.ach) save.ach = {};
-if (!save.counters) save.counters = {};
-if (save.hammers == null) save.hammers = 2;
 const bestTotal = () => Object.values(save.best).reduce((a, b) => a + b, 0);
 const starTotal = () => Object.values(save.stars).reduce((a, b) => a + b, 0);
 save.score = bestTotal();
@@ -37,277 +33,232 @@ audio.enabled = save.sound;
 const vibrate = (p) => save.vibe && navigator.vibrate && navigator.vibrate(p);
 setLang(detectLang(save.lang));
 
-// ---------------------------------------------------------------- levels
-export function levelN(L) {
-  return L === 1 ? 2 : L <= 4 ? 3 : L <= 9 ? 4 : L <= 16 ? 5 : L <= 26 ? 6 : L <= 40 ? 7 : 8;
-}
-export function levelConfig(L) {
-  const N = levelN(L);
-  const maxLen = Math.min(3 + Math.floor(Math.sqrt(L) * 1.3), 2 * N + 4);
-  return { N, seed: L * 7919 + 1013, minLen: L < 5 ? 2 : 3, maxLen, turnP: 0.35 + Math.min(0.2, L * 0.005) };
-}
-// Must match maxScore_() in leaderboard/Code.gs: a level never counts for more than this.
-const levelMax = (L) => 3 * levelN(L) ** 2 * 50 + 150 + 5 * L;
-
+// ---------------------------------------------------------------- daily challenge
 const dayKey = (d = new Date()) =>
   `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
 const yesterdayKey = () => dayKey(new Date(Date.now() - 864e5));
 function dailyConfig() {
-  const k = dayKey();
   let h = 2166136261;
-  for (const c of k) h = Math.imul(h ^ c.charCodeAt(0), 16777619);
-  const N = 5 + ((h >>> 3) % 2);
-  return { N, seed: h >>> 0, minLen: 3, maxLen: 9, turnP: 0.45 };
+  for (const c of dayKey()) h = Math.imul(h ^ c.charCodeAt(0), 16777619);
+  return { W: 12, H: 19, seed: h >>> 0, minLen: 3, maxLen: 10, turnP: 0.5, spread: 0.2 };
 }
 const currentStreak = () => {
   const d = save.daily;
   return d.last === dayKey() || d.last === yesterdayKey() ? d.streak : 0;
 };
 
-// ---------------------------------------------------------------- themes & skins
-const THEMES = {
-  light: { face: '#fdfcfa', grid: '#efeae3', edge: 0xd9d1c5, arrow: 0x3a2620 },
-  dark: { face: '#34313d', grid: '#3d3a47', edge: 0x4a4656, arrow: 0xf3ebdf },
-};
-const SKINS = [
-  { id: 'classic', stars: 0 },
-  { id: 'candy', stars: 12, face: '#fff0f6', grid: '#ffdeeb', edge: 0xf7b6cf, arrow: 0xc2255c },
-  { id: 'ocean', stars: 30, face: '#e7f5ff', grid: '#d0ebff', edge: 0xa5d8ff, arrow: 0x1c4f82 },
-  { id: 'oasis', stars: 50, face: '#f6e7c8', grid: '#ecd7ac', edge: 0xd4b77e, arrow: 0x7a4b1e },
-  { id: 'neon', stars: 75, face: '#15172b', grid: '#20233d', edge: 0x2f3357, arrow: 0x22e3ff },
-  { id: 'royal', stars: 110, face: '#2b1b4a', grid: '#382660', edge: 0x4c3780, arrow: 0xffd24a },
+// ---------------------------------------------------------------- colours
+const PALETTES = [
+  { id: 'classic', stars: 0, light: '#b08d4a', dark: '#d9bb7a' },
+  { id: 'ink', stars: 10, light: '#3a2620', dark: '#f3ebdf' },
+  { id: 'ocean', stars: 25, light: '#1f6fb2', dark: '#7cc0ff' },
+  { id: 'rose', stars: 45, light: '#c2255c', dark: '#ff8fb8' },
+  { id: 'forest', stars: 70, light: '#2f7d3f', dark: '#7ed68f' },
+  { id: 'violet', stars: 100, light: '#6d3fd1', dark: '#b79cff' },
+  { id: 'sunset', stars: 140, light: '#d9480f', dark: '#ffa94d' },
 ];
-let theme = THEMES[save.dark ? 'dark' : 'light'];
-const skinOf = (id) => SKINS.find((s) => s.id === id) || SKINS[0];
-const cubeColors = () => {
-  const s = skinOf(save.skin);
-  return s.id === 'classic' || starTotal() < s.stars ? theme : s;
-};
+const COLORS = { moving: '#f0b060', hint: '#5fbf6a', badge: '#1e5b35', error: '#e5484d' };
+const paletteOf = (id) => PALETTES.find((p) => p.id === id) || PALETTES[0];
+function arrowColor() {
+  const p = paletteOf(save.palette);
+  const ok = starTotal() >= p.stars ? p : PALETTES[0];
+  return save.dark ? ok.dark : ok.light;
+}
 
-// ---------------------------------------------------------------- three.js setup
+// ---------------------------------------------------------------- canvas & view
 const stage = $('stage');
-// three.js needs WebGL 2 (Safari/iPadOS 15+). Without it, show the "update your browser" message.
-if (!document.createElement('canvas').getContext('webgl2')) {
-  window.__fozFail?.();
-  throw new Error('WebGL 2 is not available');
-}
-const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
-renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
-stage.appendChild(renderer.domElement);
+const canvas = document.createElement('canvas');
+stage.appendChild(canvas);
+const ctx = canvas.getContext('2d');
+let dpr = 1;
+let cw = 0;
+let ch = 0;
+const view = { zoom: 1, panX: 0, panY: 0, scale: 1, ox: 0, oy: 0, area: { x: 0, y: 0, w: 1, h: 1 } };
+let dirty = true;
+let game = null;
 
-const scene = new THREE.Scene();
-const camera = new THREE.PerspectiveCamera(32, 1, 0.1, 200);
-scene.add(camera);
-scene.add(new THREE.AmbientLight(0xffffff, 1.55));
-const sun = new THREE.DirectionalLight(0xffffff, 1.5);
-sun.position.set(-0.35, 1, 0.55);
-camera.add(sun);
-camera.add(sun.target);
-sun.target.position.set(0, 0, -1);
-
-const cube = new THREE.Group();
-scene.add(cube);
-
-const lambert = (color, emissive = 0) =>
-  new THREE.MeshLambertMaterial({ color, emissive: emissive ? color : 0, emissiveIntensity: emissive });
-const mats = {
-  arrow: lambert(theme.arrow),
-  hint: lambert(0x22c55e, 0.3),
-  error: lambert(0xe5484d, 0.25),
-  gold: lambert(0xffc800, 0.4),
-  bomb: lambert(0xf76707, 0.3),
-  bombCore: new THREE.MeshBasicMaterial({ color: 0x241a17 }),
-  bombRing: new THREE.MeshBasicMaterial({ color: 0xf76707 }),
-};
-for (const m of Object.values(mats)) {
-  m.polygonOffset = true;
-  m.polygonOffsetFactor = -2;
-  m.polygonOffsetUnits = -2;
+function resize() {
+  dpr = Math.min(window.devicePixelRatio || 1, 3);
+  cw = stage.clientWidth;
+  ch = stage.clientHeight;
+  canvas.width = Math.round(cw * dpr);
+  canvas.height = Math.round(ch * dpr);
+  canvas.style.width = cw + 'px';
+  canvas.style.height = ch + 'px';
+  const top = $('statusRow').getBoundingClientRect().bottom + 6;
+  const bottom = $('bottomBar').getBoundingClientRect().top - 10;
+  view.area = { x: 14, y: top, w: Math.max(50, cw - 28), h: Math.max(50, bottom - top) };
+  layout();
 }
-// Lock/key pairs share a colour so players can match them.
-const PAIR_COLORS = [0x8b5cf6, 0x0d9488, 0xdb2777];
-const pairMats = PAIR_COLORS.map((c) => lambert(c, 0.25));
-const pairFlat = PAIR_COLORS.map((c) => new THREE.MeshBasicMaterial({ color: c }));
-for (const m of [...pairMats, ...pairFlat]) {
-  m.polygonOffset = true;
-  m.polygonOffsetFactor = -2;
-  m.polygonOffsetUnits = -2;
-}
-const sharedMats = new Set([...Object.values(mats), ...pairMats, ...pairFlat]);
-const baseMat = (a) => {
-  const k = a.data.kind;
-  if (k === 'gold') return mats.gold;
-  if (k === 'bomb') return mats.bomb;
-  if (k === 'key' || (k === 'lock' && !a.open)) return pairMats[a.data.pair];
-  return mats.arrow;
-};
-const ringGeom = new THREE.CircleGeometry(0.3, 24);
-const coreGeom = new THREE.CircleGeometry(0.19, 20);
-const plateGeom = new THREE.PlaneGeometry(0.5, 0.5);
-const holeGeom = new THREE.CircleGeometry(0.09, 16);
-const slotGeom = new THREE.PlaneGeometry(0.07, 0.16);
-const keyGeom = new THREE.RingGeometry(0.12, 0.25, 24);
-const sharedGeoms = new Set([ringGeom, coreGeom, plateGeom, holeGeom, slotGeom, keyGeom]);
+window.addEventListener('resize', resize);
 
-/** Small badge on an arrow's tail: a bomb, a padlock or a key ring. */
-function makeMarker(a) {
-  const k = a.data.kind;
-  const g = new THREE.Group();
-  const add = (geom, mat, x = 0, y = 0, z = 0) => {
-    const m = new THREE.Mesh(geom, mat);
-    m.position.set(x, y, z);
-    g.add(m);
-  };
-  if (k === 'bomb') {
-    add(ringGeom, mats.bombRing);
-    add(coreGeom, mats.bombCore, 0, 0, 0.004);
-  } else if (k === 'lock') {
-    add(plateGeom, pairFlat[a.data.pair]);
-    add(holeGeom, mats.bombCore, 0, 0.04, 0.004);
-    add(slotGeom, mats.bombCore, 0, -0.05, 0.004);
-  } else if (k === 'key') {
-    add(keyGeom, pairFlat[a.data.pair]);
-  } else return null;
-  cube.add(g);
-  return g;
-}
-function dropMarker(a, sparkle) {
-  if (!a.marker) return;
-  if (sparkle) burst(a.marker.position.clone(), new THREE.Vector3(0, 0, 0), a.mesh.material.color, 8, 0.8);
-  cube.remove(a.marker);
-  a.marker = null;
+const baseScale = () => (game ? Math.min(view.area.w / game.W, view.area.h / game.H) : 1);
+const maxZoom = () => Math.max(1, 46 / baseScale());
+
+function layout() {
+  if (!game) return;
+  view.scale = baseScale() * view.zoom;
+  const bw = game.W * view.scale;
+  const bh = game.H * view.scale;
+  const mx = Math.max(0, (bw - view.area.w) / 2 + 30);
+  const my = Math.max(0, (bh - view.area.h) / 2 + 30);
+  view.panX = Math.max(-mx, Math.min(mx, view.panX));
+  view.panY = Math.max(-my, Math.min(my, view.panY));
+  view.ox = view.area.x + (view.area.w - bw) / 2 + view.panX;
+  view.oy = view.area.y + (view.area.h - bh) / 2 + view.panY;
+  dirty = true;
 }
 
-function faceTexture(N) {
-  const col = cubeColors();
-  const cell = Math.max(48, Math.floor(768 / N));
-  const size = cell * N;
-  const c = document.createElement('canvas');
-  c.width = c.height = size;
-  const g = c.getContext('2d');
-  g.fillStyle = col.face;
-  g.fillRect(0, 0, size, size);
-  g.strokeStyle = col.grid;
-  g.lineWidth = Math.max(1, cell * 0.02);
-  for (let i = 1; i < N; i++) {
-    g.beginPath();
-    g.moveTo(i * cell, 0);
-    g.lineTo(i * cell, size);
-    g.moveTo(0, i * cell);
-    g.lineTo(size, i * cell);
-    g.stroke();
+const toGrid = (px, py) => [(px - view.ox) / view.scale, (py - view.oy) / view.scale];
+const toScreen = (gx, gy) => [view.ox + gx * view.scale, view.oy + gy * view.scale];
+
+/** Zoom to `z`, keeping the board point under (px, py) where it is. */
+function zoomAt(px, py, z) {
+  const [gx, gy] = toGrid(px, py);
+  view.zoom = Math.max(1, Math.min(maxZoom(), z));
+  view.panX = view.panY = 0;
+  layout();
+  view.panX = px - (view.ox + gx * view.scale);
+  view.panY = py - (view.oy + gy * view.scale);
+  layout();
+}
+
+// ---------------------------------------------------------------- drawing
+const LINE = 0.15;
+const HEAD_L = 0.42;
+const HEAD_W = 0.27;
+
+function strokePts(pts) {
+  ctx.beginPath();
+  ctx.moveTo(pts[0][0], pts[0][1]);
+  for (let i = 1; i < pts.length; i++) ctx.lineTo(pts[i][0], pts[i][1]);
+  ctx.stroke();
+}
+
+function drawArrow(a, color, width = LINE, head = 1) {
+  const p = a.path;
+  // Keep lines and heads a comfortable size in pixels on very large cells.
+  width = Math.min(width, (width / LINE) * 6 / view.scale);
+  head *= Math.min(1, 44 / view.scale);
+  const end = a.s + p.bodyLen;
+  ctx.strokeStyle = color;
+  ctx.fillStyle = color;
+  ctx.lineWidth = width;
+  strokePts(p.window(a.s, end - HEAD_L * 0.4 * head));
+  const [hx, hy] = p.at(end);
+  const [dx, dy] = p.dir;
+  const tip = [hx + dx * HEAD_L * 0.55 * head, hy + dy * HEAD_L * 0.55 * head];
+  const bx = hx - dx * HEAD_L * 0.45 * head;
+  const by = hy - dy * HEAD_L * 0.45 * head;
+  const w = HEAD_W * head;
+  ctx.beginPath();
+  ctx.moveTo(tip[0], tip[1]);
+  ctx.lineTo(bx - dy * w, by + dx * w);
+  ctx.lineTo(bx + dy * w, by - dx * w);
+  ctx.closePath();
+  ctx.fill();
+}
+
+function drawBadge(a, n) {
+  const [x, y] = a.path.at(a.s);
+  const r = 0.24 * Math.min(1, 50 / view.scale);
+  ctx.fillStyle = COLORS.badge;
+  ctx.beginPath();
+  if (ctx.roundRect) ctx.roundRect(x - r, y - r, r * 2, r * 2, 0.07);
+  else ctx.rect(x - r, y - r, r * 2, r * 2);
+  ctx.fill();
+  ctx.fillStyle = '#fff';
+  ctx.font = `800 ${r * 1.35}px system-ui, sans-serif`;
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  ctx.fillText(fmt(n), x, y + 0.02);
+}
+
+function draw() {
+  dirty = false;
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  ctx.clearRect(0, 0, cw, ch);
+  if (!game) return;
+  ctx.save();
+  if (view.zoom > 1) {
+    // Zoomed in: keep the board inside its area, clear of the drops and buttons.
+    const r = view.area;
+    ctx.beginPath();
+    ctx.rect(0, r.y - 4, cw, r.h + 8);
+    ctx.clip();
   }
-  const tex = new THREE.CanvasTexture(c);
-  tex.colorSpace = THREE.SRGBColorSpace;
-  tex.anisotropy = renderer.capabilities.getMaxAnisotropy();
-  return tex;
+  ctx.setTransform(dpr * view.scale, 0, 0, dpr * view.scale, dpr * view.ox, dpr * view.oy);
+  ctx.lineJoin = 'round';
+  ctx.lineCap = 'round';
+  const base = arrowColor();
+  for (const a of game.arrows) {
+    if (a.state === 'gone' || a.state === 'exit' || game.hint.has(a.data.id)) continue;
+    drawArrow(a, a.flash > 0 ? COLORS.error : base);
+  }
+  for (const [id, n] of game.hint) {
+    const a = game.arrows[id];
+    if (a.state === 'gone' || a.state === 'exit') continue;
+    drawArrow(a, a.flash > 0 ? COLORS.error : COLORS.hint, 0.3, 1.15);
+    drawBadge(a, n);
+  }
+  for (const a of game.arrows) {
+    if (a.state !== 'exit') continue;
+    ctx.globalAlpha = a.alpha;
+    drawArrow(a, COLORS.moving);
+    ctx.globalAlpha = 1;
+  }
+  ctx.restore();
 }
 
 // ---------------------------------------------------------------- game state
-const ISO = new THREE.Quaternion().setFromEuler(new THREE.Euler(0.5, -0.68, 0, 'XYZ'));
-let game = null;
-
-function disposeLevel() {
-  if (!game) return;
-  cube.traverse((o) => {
-    if (o.geometry && o.geometry !== particleGeom && !sharedGeoms.has(o.geometry)) o.geometry.dispose();
-    if (o.material && !sharedMats.has(o.material)) {
-      if (o.material.map) o.material.map.dispose();
-      o.material.dispose();
-    }
-  });
-  cube.clear();
-  particles.length = 0;
-}
-
-const isBoss = (L) => L % 10 === 0;
 function startLevel(L) {
-  startGame({ mode: 'level', level: L, cfg: levelConfig(L), boss: isBoss(L) });
+  startGame({ mode: 'level', level: L, cfg: levelConfig(L) });
 }
 function startDaily() {
-  startGame({ mode: 'daily', level: 30, cfg: dailyConfig() });
+  startGame({ mode: 'daily', level: 0, cfg: dailyConfig() });
 }
 const restart = () => (game.mode === 'daily' ? startDaily() : startLevel(game.level));
 
-function startGame({ mode, level: L, cfg, boss = false }) {
-  disposeLevel();
+function startGame({ mode, level: L, cfg }) {
   hideModals();
-  endFever(true);
   const puzzle = generate(cfg);
-  assignKinds(puzzle.arrows, L, cfg.seed);
-  const N = cfg.N;
-
-  const box = new THREE.Mesh(new THREE.BoxGeometry(N, N, N), new THREE.MeshLambertMaterial({ map: faceTexture(N) }));
-  cube.add(box);
-  const edges = new THREE.LineSegments(
-    new THREE.EdgesGeometry(box.geometry),
-    new THREE.LineBasicMaterial({ color: cubeColors().edge }),
-  );
-  edges.scale.setScalar(1.001);
-  cube.add(edges);
-
-  const occ = new Map();
+  const { W, H } = cfg;
+  const occ = new Int32Array(W * H).fill(-1);
   const arrows = puzzle.arrows.map((data) => {
-    const track = new Track(data, N);
-    const a = { data, track, state: 'idle', s: 0, v: 0, flash: 0 };
-    a.mesh = new THREE.Mesh(buildArrowGeometry(track, 0, track.bodyLen, new THREE.BufferGeometry()), baseMat(a));
-    cube.add(a.mesh);
-    a.marker = makeMarker(a);
-    if (a.marker) placeMarker(a);
-    for (const c of data.cells) occ.set(key(c.p), data.id);
-    return a;
+    for (const c of data.cells) occ[c] = data.id;
+    return { data, path: new Path(data, W).addExit(W, H), state: 'idle', s: 0, v: 0, flash: 0, alpha: 1 };
   });
-
   game = {
-    mode, level: L, N, box, edges, occ, arrows,
+    mode, level: L, W, H, occ, arrows,
     total: arrows.length, left: arrows.length,
-    hearts: 3, mistakes: 0, combo: 0, lastFree: 0, gained: 0,
-    hinted: null, over: false, started: performance.now(),
-    intro: 0, blasts: [], hammer: false,
-    boss, timeLeft: boss ? Math.round(40 + arrows.length * 2.5) : 0, lastTick: 0,
+    lives: 3, mistakes: 0, combo: 0, lastFree: 0, gained: 0,
+    hint: new Map(), over: false, started: performance.now(),
   };
-  cube.quaternion.copy(ISO).multiply(new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 1, 0), -2.2));
-  rot.from = cube.quaternion.clone();
-  rot.to = ISO.clone();
-  rot.t = 0;
-  rot.dur = 1.1;
-  spin.x = spin.y = 0;
-  zoom = 1;
-  fitCamera();
-  $('comboBadge').classList.remove('show');
+  view.zoom = 1;
+  view.panX = view.panY = 0;
+  resize();
   updateHud(true);
   showTutorial(mode === 'level' ? L : 0);
   renderDailyBtn();
-  $('timer').hidden = !boss;
-  document.body.classList.toggle('boss', boss);
-  if (boss) setTimeout(() => shout(t('bossShout')), 500);
-}
-
-const zAxis = new THREE.Vector3(0, 0, 1);
-function placeMarker(a) {
-  const { p, n } = a.track.pointAt(a.s);
-  a.marker.position.copy(p).addScaledVector(n, 0.02);
-  a.marker.quaternion.setFromUnitVectors(zAxis, n);
+  stage.classList.remove('intro');
+  void stage.offsetWidth;
+  stage.classList.add('intro');
 }
 
 // ---------------------------------------------------------------- HUD
-const levelScore = () => Math.min(game.gained, levelMax(game.level));
+const levelScore = () => Math.min(game.gained, levelMax(Math.max(1, game.level)));
 
 function updateHud(reset) {
-  $('level').textContent = game.mode === 'daily' ? t('dailyTitle') : t('level', { n: game.level });
+  $('level').textContent = game.mode === 'daily' ? t('dailyTitle') : t('level', { n: fmtPlain(game.level) });
   $('left').textContent = fmt(game.left);
-  let shown = save.score;
-  if (game.mode === 'level') shown = Math.max(save.score, save.score - (save.best[game.level] || 0) + levelScore());
-  $('score').textContent = fmt(shown);
   $('hintCount').textContent = fmt(save.hints);
   $('hintBtn').classList.toggle('empty', save.hints <= 0);
-  renderHammer();
   $('progress').style.width = ((1 - game.left / game.total) * 100).toFixed(1) + '%';
-  const hearts = $('hearts').children;
-  for (let i = 0; i < hearts.length; i++) {
-    const lost = i >= game.hearts;
-    if (reset) hearts[i].classList.remove('lost', 'pop');
-    else if (lost && !hearts[i].classList.contains('lost')) hearts[i].classList.add('lost', 'pop');
+  const drops = $('lives').children;
+  for (let i = 0; i < drops.length; i++) {
+    const lost = i >= game.lives;
+    if (reset) drops[i].classList.remove('lost', 'pop');
+    else if (lost && !drops[i].classList.contains('lost')) drops[i].classList.add('lost', 'pop');
   }
 }
 
@@ -319,265 +270,21 @@ function bump(el) {
 
 function showTutorial(L) {
   const el = $('tip');
-  const has = [1, 2, 3, 4, 5, 7, 8, 9, 10, 11].includes(L);
-  el.classList.toggle('show', has);
-  if (has) el.textContent = t('tut' + L);
+  let key = { 1: 'tut1', 2: 'tut2', 3: 'tut3', 5: 'tut5' }[L];
+  if (L > 1 && levelConfig(L).W >= 12 && levelConfig(L - 1).W < 12) key = 'tut4';
+  el.classList.toggle('show', !!key);
+  if (key) el.textContent = t(key);
 }
 
-function worldToScreen(v) {
-  const p = v.clone().project(camera);
-  const r = renderer.domElement.getBoundingClientRect();
-  return { x: r.left + ((p.x + 1) / 2) * r.width, y: r.top + ((1 - p.y) / 2) * r.height };
-}
-
-function floatText(text, world, cls = '') {
-  const s = worldToScreen(world);
+function floatText(text, gx, gy, cls = '') {
+  const [x, y] = toScreen(gx, gy);
   const el = document.createElement('div');
   el.className = 'float ' + cls;
   el.textContent = text;
-  el.style.left = s.x + 'px';
-  el.style.top = s.y + 'px';
+  el.style.left = x + 'px';
+  el.style.top = y + 'px';
   document.body.appendChild(el);
   el.addEventListener('animationend', () => el.remove());
-}
-
-const cellLocal = (p) => new THREE.Vector3(p[0] / 2, p[1] / 2, p[2] / 2);
-const headOf = (a) => a.data.cells[a.data.cells.length - 1];
-const headWorld = (a) => cube.localToWorld(cellLocal(headOf(a).p));
-
-// ---------------------------------------------------------------- particles
-const particles = [];
-const particleGeom = new THREE.PlaneGeometry(0.14, 0.14);
-function burst(pos, normal, color, count = 10, speed = 1) {
-  for (let i = 0; i < count; i++) {
-    const m = new THREE.Mesh(particleGeom, new THREE.MeshBasicMaterial({ color, transparent: true, side: THREE.DoubleSide }));
-    m.position.copy(pos);
-    const v = new THREE.Vector3(Math.random() - 0.5, Math.random() - 0.5, Math.random() - 0.5)
-      .multiplyScalar(4 * speed)
-      .addScaledVector(normal, (2 + Math.random() * 2) * speed);
-    m.rotation.set(Math.random() * 6, Math.random() * 6, 0);
-    cube.add(m);
-    particles.push({ m, v, life: 0.5 + Math.random() * 0.3, t: 0 });
-  }
-}
-
-// ---------------------------------------------------------------- gameplay
-function clearHint() {
-  const h = game.hinted;
-  game.hinted = null;
-  if (h && h.state === 'idle') h.mesh.material = baseMat(h);
-}
-
-/** Points for clearing one arrow at the current combo. */
-function award(a, at) {
-  const mult = Math.min(game.combo, 5);
-  const gold = a.data.kind === 'gold' ? 3 : 1;
-  const fever = game.fever > 0 ? 2 : 1;
-  const pts = 10 * mult * gold * fever;
-  game.gained += pts;
-  floatText((gold > 1 ? '✨+' : '+') + fmt(pts), at, mult > 1 || gold > 1 || fever > 1 ? 'combo' : '');
-  if (gold > 1) sfx.gold();
-}
-
-function tryFree(a) {
-  if (game.over || a.state !== 'idle') return;
-  unlockAudio();
-  if (game.hammer) {
-    smash(a);
-    return;
-  }
-  if (game.hinted === a) clearHint();
-
-  if (a.data.kind === 'lock' && !a.open) {
-    // Rattle the padlock and point at the key. It's visible information, so no heart is lost.
-    a.state = 'bump';
-    a.s = 0;
-    a.phase = 1;
-    a.bumpTo = 0.15;
-    const k = game.arrows[a.data.keyId];
-    if (k.state === 'idle') {
-      k.mesh.material = mats.hint;
-      k.flash = 0.8;
-    }
-    game.combo = 0;
-    $('comboBadge').classList.remove('show');
-    floatText(t('locked'), headWorld(a), 'lock');
-    sfx.locked();
-    vibrate(25);
-    return;
-  }
-
-  const block = blockersOf(a.data, game.occ, game.N);
-  const now = performance.now();
-
-  if (!block) {
-    for (const c of a.data.cells) game.occ.delete(key(c.p));
-    a.state = 'exit';
-    a.s = 0;
-    a.v = 7;
-    a.burst = false;
-    a.mesh.material = baseMat(a).clone();
-    a.mesh.material.transparent = true;
-    game.left--;
-    game.combo = now - game.lastFree < 1600 ? game.combo + 1 : 1;
-    game.lastFree = now;
-    award(a, headWorld(a));
-    left(a);
-    sfx.free(game.combo - 1);
-    vibrate(8);
-    if (game.combo >= 2) {
-      $('comboBadge').textContent = '×' + fmt(Math.min(game.combo, 5));
-      $('comboBadge').classList.add('show');
-      bump($('comboBadge'));
-    }
-    if (game.fever > 0) game.fever = Math.min(8, game.fever + 0.5);
-    else if (game.combo >= 8) startFever();
-    if (game.combo >= 20) achieve('combo20');
-    const praise = { 5: 1, 10: 1, 15: 1, 20: 1, 30: 1 }[game.combo];
-    if (praise && game.combo !== 8) shout(t('praise' + game.combo));
-    if (a.data.kind === 'bomb') explode(a);
-    if (game.mode === 'level' && game.level <= 2 && game.left < game.total) $('tip').classList.remove('show');
-    updateHud();
-    bump($('leftPill'));
-  } else {
-    a.state = 'bump';
-    a.s = 0;
-    a.phase = 1;
-    a.bumpTo = block.dist + 0.3;
-    a.mesh.material = mats.error;
-    const blocker = game.arrows[block.id];
-    if (blocker.state === 'idle') {
-      blocker.mesh.material = mats.error;
-      blocker.flash = 0.7;
-    }
-    game.hearts--;
-    game.mistakes++;
-    game.combo = 0;
-    endFever();
-    $('comboBadge').classList.remove('show');
-    sfx.block();
-    vibrate([40, 30, 40]);
-    shake();
-    updateHud();
-    if (game.hearts <= 0) {
-      game.over = true;
-      setTimeout(showLose, 800);
-    }
-  }
-}
-
-/** A freed bomb blows up every arrow touching its body; bombs set off chains. */
-function explode(bomb) {
-  dropMarker(bomb);
-  const cells = bomb.data.cells.map((c) => c.p);
-  const victims = new Set();
-  for (const [k, id] of game.occ) {
-    const p = k.split(',').map(Number);
-    if (cells.some((q) => (p[0] - q[0]) ** 2 + (p[1] - q[1]) ** 2 + (p[2] - q[2]) ** 2 <= 9)) victims.add(id);
-  }
-  const n = cellLocal(headOf(bomb).n).multiplyScalar(2);
-  for (const c of bomb.data.cells) burst(cellLocal(c.p), n, 0xf76707, 5, 1.5);
-  sfx.boom();
-  vibrate([60, 30, 90]);
-  shake();
-  floatText(t('boom'), headWorld(bomb), 'boom');
-  for (const id of victims) {
-    const v = game.arrows[id];
-    if (v.state !== 'idle') continue;
-    if (game.hinted === v) clearHint();
-    for (const c of v.data.cells) game.occ.delete(key(c.p));
-    v.state = 'pop';
-    v.t = 0;
-    v.mesh.material = baseMat(v).clone();
-    v.mesh.material.transparent = true;
-    game.left--;
-    award(v, headWorld(v));
-    left(v);
-    for (const c of v.data.cells) burst(cellLocal(c.p), cellLocal(c.n).multiplyScalar(2), v.mesh.material.color, 3, 1.2);
-    if (v.data.kind === 'bomb') {
-      game.blasts.push({ a: v, t: 0.18 });
-      achieve('chain');
-    }
-  }
-}
-
-/** Called whenever an arrow leaves the cube, however it left. */
-function left(a) {
-  if (a.data.kind === 'key') {
-    dropMarker(a, true);
-    const lock = game.arrows[a.data.lockId];
-    if (lock.state === 'idle' || lock.state === 'bump') {
-      lock.open = true;
-      dropMarker(lock, true);
-      if (sharedMats.has(lock.mesh.material)) lock.mesh.material = baseMat(lock);
-      floatText(t('unlocked'), headWorld(lock), 'lock');
-      sfx.unlock();
-      save.counters.locks = (save.counters.locks || 0) + 1;
-      if (save.counters.locks >= 10) achieve('locks');
-    }
-  }
-}
-
-function toggleHammer() {
-  if (!game || game.over) return;
-  if (game.hammer) {
-    game.hammer = false;
-    $('tip').classList.remove('show');
-  } else if (save.hammers <= 0) {
-    bump($('hammerBtn'));
-    return;
-  } else {
-    game.hammer = true;
-    $('tip').textContent = t('hammerTip');
-    $('tip').classList.add('show');
-  }
-  renderHammer();
-}
-
-function renderHammer() {
-  $('hammerCount').textContent = fmt(save.hammers);
-  $('hammerBtn').classList.toggle('armed', !!game?.hammer);
-  $('hammerBtn').classList.toggle('empty', save.hammers <= 0);
-}
-
-/** The hammer smashes any arrow, blocked or locked. No points, no penalty. */
-function smash(a) {
-  game.hammer = false;
-  save.hammers--;
-  persist();
-  $('tip').classList.remove('show');
-  if (game.hinted === a) clearHint();
-  for (const c of a.data.cells) game.occ.delete(key(c.p));
-  a.state = 'pop';
-  a.t = 0;
-  a.mesh.material = baseMat(a).clone();
-  a.mesh.material.transparent = true;
-  game.left--;
-  for (const c of a.data.cells) burst(cellLocal(c.p), cellLocal(c.n).multiplyScalar(2), a.mesh.material.color, 6, 1.4);
-  floatText(t('smash'), headWorld(a), 'boom');
-  sfx.smash();
-  vibrate([30, 20, 70]);
-  shake();
-  left(a);
-  if (a.data.kind === 'bomb') explode(a);
-  else dropMarker(a);
-  achieve('hammer');
-  updateHud();
-}
-
-function startFever() {
-  game.fever = 6;
-  achieve('fever');
-  document.body.classList.add('fever');
-  shout(t('fever'));
-  sfx.fever();
-  vibrate([20, 20, 20, 20, 40]);
-}
-function endFever(silent) {
-  if (game) game.fever = 0;
-  document.body.classList.remove('fever');
-  mats.arrow.emissive.setHex(0);
-  if (!silent) $('heat').classList.remove('on');
 }
 
 function shout(text) {
@@ -594,11 +301,66 @@ function shake() {
   stage.classList.add('shake');
 }
 
+// ---------------------------------------------------------------- gameplay
+function tryFree(a) {
+  if (game.over || a.state !== 'idle') return;
+  unlockAudio();
+  const { W, H, occ } = game;
+  const block = blockersOf(W, H, a.data, occ);
+  const now = performance.now();
+
+  if (!block) {
+    for (const c of a.data.cells) occ[c] = -1;
+    game.hint.delete(a.data.id);
+    a.state = 'exit';
+    a.s = 0;
+    a.v = 6;
+    game.left--;
+    game.combo = now - game.lastFree < 1600 ? game.combo + 1 : 1;
+    game.lastFree = now;
+    const mult = Math.min(game.combo, 5);
+    const pts = 10 * mult;
+    game.gained += pts;
+    const [hx, hy] = a.path.head;
+    floatText('+' + fmt(pts), hx, hy, mult > 1 ? 'combo' : '');
+    sfx.free(game.combo - 1);
+    vibrate(8);
+    if (game.combo >= 20) achieve('combo20');
+    if ([5, 10, 15, 20, 30].includes(game.combo)) shout(t('praise' + game.combo));
+    if (game.mode === 'level' && game.level <= 2) $('tip').classList.remove('show');
+    updateHud();
+    bump($('leftPill'));
+  } else {
+    a.state = 'bump';
+    a.s = 0;
+    a.phase = 1;
+    a.bumpTo = block.dist + 0.3;
+    a.flash = 0.9;
+    game.arrows[block.id].flash = 0.9;
+    game.lives--;
+    game.mistakes++;
+    game.combo = 0;
+    sfx.block();
+    vibrate([40, 30, 40]);
+    shake();
+    updateHud();
+    if (game.lives <= 0) {
+      game.over = true;
+      setTimeout(showLose, 800);
+    }
+  }
+  dirty = true;
+}
+
+/**
+ * Hint: number the next moves. A few arrows that can leave right now get a 1,
+ * and arrows that those free up get a 2.
+ */
 function useHint() {
   unlockAudio();
   if (!game || game.over) return;
-  if (game.hinted) {
-    showArrow(game.hinted);
+  if (game.hint.size) {
+    sfx.click();
     return;
   }
   if (save.hints <= 0) {
@@ -606,44 +368,43 @@ function useHint() {
     sfx.click();
     return;
   }
-  const free = game.arrows.filter(
-    (a) => a.state === 'idle' && !(a.data.kind === 'lock' && !a.open) && !blockersOf(a.data, game.occ, game.N),
-  );
+  const { W, H } = game;
+  const occ = game.occ.slice();
+  const idle = game.arrows.filter((a) => a.state === 'idle' || a.state === 'bump');
+  const free = idle.filter((a) => !blockersOf(W, H, a.data, occ));
   if (!free.length) return;
-  // Prefer an arrow that already faces the player.
-  const facing = (a) => new THREE.Vector3(...headOf(a).n).applyQuaternion(cube.quaternion).z;
-  free.sort((x, y) => facing(y) - facing(x));
-  const a = free[0];
+  free.sort((x, y) => y.data.id - x.data.id);
+  const ones = free.slice(0, 3);
+  for (const a of ones) {
+    game.hint.set(a.data.id, 1);
+    for (const c of a.data.cells) occ[c] = -1;
+  }
+  const twos = idle.filter((a) => !game.hint.has(a.data.id) && !free.includes(a) && !blockersOf(W, H, a.data, occ));
+  for (const a of twos.slice(0, 2)) game.hint.set(a.data.id, 2);
   save.hints--;
   persist();
-  game.hinted = a;
-  a.mesh.material = mats.hint;
   sfx.hint();
   vibrate(10);
-  showArrow(a);
   updateHud();
-}
-
-function showArrow(a) {
-  const nw = new THREE.Vector3(...headOf(a).n).applyQuaternion(cube.quaternion);
-  const view = new THREE.Vector3(0.15, 0.35, 1).normalize();
-  if (nw.dot(zAxis) > 0.6) return;
-  const q = new THREE.Quaternion().setFromUnitVectors(nw, view);
-  animateTo(q.multiply(cube.quaternion));
+  dirty = true;
+  // Zoomed in? Bring the first hinted arrow into view.
+  if (view.zoom > 1) {
+    const [x, y] = toScreen(...ones[0].path.head);
+    view.panX -= x - (view.area.x + view.area.w / 2);
+    view.panY -= y - (view.area.y + view.area.h / 2);
+    layout();
+  }
 }
 
 function checkWin() {
   if (game.over || game.left > 0) return;
-  if (game.arrows.some((a) => a.state === 'exit' || a.state === 'pop')) return;
+  if (game.arrows.some((a) => a.state === 'exit')) return;
   game.over = true;
-  endFever();
-  game.hammer = false;
   const stars = Math.max(1, 3 - game.mistakes);
-  let chest = null;
   const secs = Math.round((performance.now() - game.started) / 1000);
   const starsBefore = starTotal();
   const hintReward = stars === 3 ? 1 : 0;
-  save.hints += hintReward;
+  let bonusHint = 0;
 
   if (game.mode === 'daily') {
     const d = save.daily;
@@ -655,6 +416,8 @@ function checkWin() {
     const prev = d.done[today];
     if (!prev || stars > prev.stars || (stars === prev.stars && secs < prev.secs)) d.done[today] = { stars, secs };
     for (const k of Object.keys(d.done).sort().slice(0, -30)) delete d.done[k];
+    achieve('daily');
+    if (currentStreak() >= 7) achieve('streak7');
   } else {
     save.stars[game.level] = Math.max(save.stars[game.level] || 0, stars);
     game.gained += 50 * stars + game.level * 5;
@@ -663,29 +426,22 @@ function checkWin() {
     save.score = bestTotal();
     const reachedNew = game.level + 1 > save.level;
     save.level = Math.max(save.level, game.level + 1);
+    // A bonus hint every 5 new levels: the big boards need them.
+    if (reachedNew && game.level % 5 === 0) bonusHint = 1;
     if (newBest || reachedNew) pushScore();
     achieve('first');
-    if (game.boss) achieve('boss');
     if (Object.values(save.stars).filter((v) => v === 3).length >= 10) achieve('flawless10');
-    if (save.level >= 25) achieve('level25');
-    // A gift every third new level, and always after a boss.
-    if (game.boss || (reachedNew && game.level % 3 === 0)) {
-      const r = Math.random();
-      chest = r < 0.4 ? { hints: 1 } : r < 0.75 ? { hammers: 1 } : r < 0.92 ? { hints: 2 } : { hammers: 2 };
-      if (game.boss) for (const k in chest) chest[k] *= 2;
-      save.hints += chest.hints || 0;
-      save.hammers += chest.hammers || 0;
-    }
+    for (const n of [50, 100, 250, 500]) if (save.level >= n) achieve('level' + n);
   }
-  if (game.mode === 'daily' && currentStreak() >= 7) achieve('streak7');
+  if (game.total >= 30 && secs < 60) achieve('speed');
+  save.hints += hintReward + bonusHint;
   persist();
-  const unlocked = SKINS.find((s) => s.stars > starsBefore && s.stars <= starTotal());
+  const unlocked = PALETTES.find((p) => p.stars > starsBefore && p.stars <= starTotal());
   sfx.win();
   vibrate([20, 40, 20, 40, 60]);
   confetti();
   shout(t('win' + stars));
-  spin.x = 700;
-  setTimeout(() => showWin(stars, secs, hintReward, unlocked, chest), 900);
+  setTimeout(() => showWin(stars, secs, hintReward, bonusHint, unlocked), 900);
 }
 
 // ---------------------------------------------------------------- modals
@@ -693,7 +449,7 @@ function hideModals() {
   document.querySelectorAll('.modal').forEach((m) => m.classList.remove('show'));
 }
 
-function showWin(stars, secs, hintReward, unlocked, chest) {
+function showWin(stars, secs, hintReward, bonusHint, unlocked) {
   const daily = game.mode === 'daily';
   $('winTitle').textContent = t('win' + stars);
   $('winStats').innerHTML =
@@ -702,24 +458,12 @@ function showWin(stars, secs, hintReward, unlocked, chest) {
       : `<div><b>+${fmt(levelScore())}</b><span>${t('points')}</span></div>`) +
     `<div><b>${fmtTime(secs)}</b><span>${t('time')}</span></div>` +
     `<div><b>${fmt(game.total)}</b><span>${t('arrows')}</span></div>`;
-  $('winReward').textContent = hintReward ? t('hintYes') : t('hintNo');
+  $('winReward').textContent =
+    (hintReward ? t('hintYes') : t('hintNo')) + (bonusHint ? ' · 🎁 +' + fmt(bonusHint) + ' 💡' : '');
   $('winUnlock').hidden = !unlocked;
-  if (unlocked) $('winUnlock').textContent = t('newSkin', { name: t('skin_' + unlocked.id) });
+  if (unlocked) $('winUnlock').textContent = t('newSkin', { name: t('pal_' + unlocked.id) });
   $('nextBtn').textContent = daily ? t('continueLevels') : t('next');
   $('shareBtn').hidden = !daily;
-  const cb = $('chestBtn');
-  cb.hidden = !chest;
-  cb.classList.remove('open');
-  cb.disabled = false;
-  cb.textContent = t('chestTap');
-  cb.onclick = () => {
-    cb.classList.add('open');
-    cb.disabled = true;
-    cb.textContent = chest.hints ? t('chestHint', { n: chest.hints }) : t('chestHammer', { n: chest.hammers });
-    sfx.chest();
-    vibrate([15, 30, 15, 30, 40]);
-    confetti(30);
-  };
   game.lastWin = { stars, secs };
   const starEls = $('stars').children;
   for (let i = 0; i < 3; i++) {
@@ -750,13 +494,10 @@ async function shareDaily() {
   } catch {}
 }
 
-function showLose(timeUp) {
+function showLose() {
   sfx.lose();
   const freed = game.total - game.left;
-  $('loseTitle').textContent = t(timeUp ? 'timeUp' : 'loseTitle');
-  $('loseText').textContent = timeUp
-    ? t('timeUpText', { a: freed, b: game.total })
-    : t('loseText', { a: freed, b: game.total, p: Math.round((freed / game.total) * 100) });
+  $('loseText').textContent = t('loseText', { a: freed, b: game.total, p: Math.round((freed / game.total) * 100) });
   $('lose').classList.add('show');
 }
 
@@ -768,7 +509,7 @@ function confetti(count = 90) {
     el.style.left = Math.random() * 100 + 'vw';
     el.style.background = colors[i % colors.length];
     el.style.setProperty('--dx', (Math.random() - 0.5) * 200 + 'px');
-    el.style.setProperty('--r', (Math.random() * 1080 - 540) + 'deg');
+    el.style.setProperty('--r', Math.random() * 1080 - 540 + 'deg');
     el.style.animationDuration = 1.6 + Math.random() * 1.4 + 's';
     el.style.animationDelay = Math.random() * 0.4 + 's';
     document.body.appendChild(el);
@@ -776,7 +517,40 @@ function confetti(count = 90) {
   }
 }
 
-// ---------------------------------------------------------------- daily button & skins
+// ---------------------------------------------------------------- level select
+const LV_PER_PAGE = 100;
+let lvPage = 0;
+const lvPages = () => Math.max(10, Math.ceil((save.level + 1) / LV_PER_PAGE));
+
+function openLevels() {
+  hideModals();
+  lvPage = Math.floor((save.level - 1) / LV_PER_PAGE);
+  renderLevels();
+  $('levels').classList.add('show');
+  $('lvGrid').querySelector('.current')?.scrollIntoView({ block: 'center' });
+}
+
+function renderLevels() {
+  lvPage = Math.max(0, Math.min(lvPages() - 1, lvPage));
+  const from = lvPage * LV_PER_PAGE + 1;
+  const to = from + LV_PER_PAGE - 1;
+  $('lvRange').textContent = fmtPlain(from) + ' – ' + fmtPlain(to);
+  $('lvStars').textContent = '★ ' + fmt(starTotal()) + '  ·  ' + fmt(save.score);
+  $('lvPrev').disabled = lvPage === 0;
+  $('lvNext').disabled = lvPage >= lvPages() - 1;
+  let html = '';
+  for (let n = from; n <= to; n++) {
+    const st = save.stars[n] || 0;
+    const locked = n > save.level;
+    const cls = locked ? 'locked' : n === save.level ? 'current' : st ? 'done' : '';
+    html += `<button class="lv ${cls}" data-lv="${n}"><b>${locked ? '🔒' : fmtPlain(n)}</b><small>${
+      locked ? fmtPlain(n) : '★'.repeat(st) + '☆'.repeat(3 - st)
+    }</small></button>`;
+  }
+  $('lvGrid').innerHTML = html;
+}
+
+// ---------------------------------------------------------------- daily button, palettes
 function renderDailyBtn() {
   const done = !!save.daily.done[dayKey()];
   const streak = currentStreak();
@@ -786,35 +560,34 @@ function renderDailyBtn() {
   $('dailyBtn').classList.toggle('active', game?.mode === 'daily');
 }
 
-function renderSkins() {
+function renderPalettes() {
   const have = starTotal();
-  $('skinStars').textContent = '★ ' + fmt(have);
-  $('skins').innerHTML = SKINS.map((s) => {
-    const col = s.id === 'classic' ? theme : s;
-    const locked = have < s.stars;
-    const hex = (n) => '#' + n.toString(16).padStart(6, '0');
-    return `<button class="skin${save.skin === s.id ? ' sel' : ''}${locked ? ' locked' : ''}" data-skin="${s.id}"
-      style="--f:${col.face};--g:${col.grid};--a:${hex(col.arrow)}" aria-label="${t('skin_' + s.id)}">
-      <i class="sw"><b></b></i><span>${locked ? '🔒 ' + fmt(s.stars) + '★' : t('skin_' + s.id)}</span></button>`;
+  $('palStars').textContent = '★ ' + fmt(have);
+  $('palettes').innerHTML = PALETTES.map((p) => {
+    const locked = have < p.stars;
+    const col = save.dark ? p.dark : p.light;
+    return `<button class="pal${save.palette === p.id ? ' sel' : ''}${locked ? ' locked' : ''}" data-pal="${p.id}">
+      <svg viewBox="0 0 40 40"><path d="M8 34V20h16V10" fill="none" stroke="${col}" stroke-width="3.5" stroke-linejoin="round"/><path d="m24 3 6.5 8.5h-13z" fill="${col}"/></svg>
+      <span>${locked ? '🔒 ' + fmt(p.stars) + '★' : t('pal_' + p.id)}</span></button>`;
   }).join('');
 }
 
-function pickSkin(id) {
-  const s = skinOf(id);
-  if (starTotal() < s.stars) {
-    shout(t('styleLocked', { n: s.stars }));
+function pickPalette(id) {
+  const p = paletteOf(id);
+  if (starTotal() < p.stars) {
+    shout(t('styleLocked', { n: p.stars }));
     return;
   }
-  save.skin = id;
+  save.palette = id;
   persist();
-  applyTheme();
-  renderSkins();
+  renderPalettes();
+  dirty = true;
 }
 
 // ---------------------------------------------------------------- achievements
 const ACHIEVEMENTS = [
-  ['first', '🎯'], ['fever', '🌡️'], ['combo20', '🔥'], ['chain', '💥'], ['hammer', '🔨'],
-  ['boss', '👑'], ['locks', '🔓'], ['flawless10', '⭐'], ['streak7', '💪'], ['level25', '🧊'],
+  ['first', '🎯'], ['combo20', '🔥'], ['flawless10', '⭐'], ['daily', '☀️'], ['streak7', '💪'],
+  ['speed', '⚡'], ['level50', '🥉'], ['level100', '🥈'], ['level250', '🥇'], ['level500', '👑'],
 ];
 const toasts = [];
 function achieve(id) {
@@ -845,62 +618,23 @@ function showToast() {
 function renderAchievements() {
   const got = ACHIEVEMENTS.filter(([id]) => save.ach[id]).length;
   $('achCount').textContent = fmt(got) + ' / ' + fmt(ACHIEVEMENTS.length);
-  $('achList').innerHTML = ACHIEVEMENTS.map(([id, icon]) =>
-    `<li class="${save.ach[id] ? 'got' : ''}"><span class="ic">${icon}</span><span><b>${t('ach_' + id)}</b><small>${t('achd_' + id)}</small></span></li>`,
+  $('achList').innerHTML = ACHIEVEMENTS.map(
+    ([id, icon]) =>
+      `<li class="${save.ach[id] ? 'got' : ''}"><span class="ic">${icon}</span><span><b>${t('ach_' + id)}</b><small>${t('achd_' + id)}</small></span></li>`,
   ).join('');
-}
-
-// ---------------------------------------------------------------- camera & rotation
-let zoom = 1;
-const rot = { from: null, to: null, t: 1, dur: 0.5 };
-const spin = { x: 0, y: 0 };
-
-function animateTo(q, dur = 0.55) {
-  rot.from = cube.quaternion.clone();
-  rot.to = q.clone();
-  rot.t = 0;
-  rot.dur = dur;
-  spin.x = spin.y = 0;
-}
-
-function fitCamera() {
-  const w = stage.clientWidth;
-  const h = stage.clientHeight;
-  renderer.setSize(w, h, false);
-  camera.aspect = w / h;
-  camera.updateProjectionMatrix();
-  if (!game) return;
-  const r = (game.N / 2) * Math.sqrt(3);
-  const vf = THREE.MathUtils.degToRad(camera.fov);
-  const hf = 2 * Math.atan(Math.tan(vf / 2) * camera.aspect);
-  const dist = (r * 1.08) / Math.sin(Math.min(vf, hf) / 2) / zoom;
-  camera.position.set(0, 0, dist);
-  camera.lookAt(0, 0, 0);
-}
-window.addEventListener('resize', fitCamera);
-
-function rotateBy(dx, dy) {
-  const k = 5 / Math.min(stage.clientWidth, stage.clientHeight);
-  const qy = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 1, 0), dx * k);
-  const qx = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(1, 0, 0), dy * k);
-  cube.quaternion.premultiply(qy).premultiply(qx);
 }
 
 // ---------------------------------------------------------------- input
 const pointers = new Map();
 let gesture = null;
-const canvas = renderer.domElement;
 
 canvas.addEventListener('pointerdown', (e) => {
   canvas.setPointerCapture(e.pointerId);
   pointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
-  if (pointers.size === 1) {
-    gesture = { x0: e.clientX, y0: e.clientY, t0: performance.now(), moved: false, samples: [] };
-    spin.x = spin.y = 0;
-    rot.t = 1;
-  } else if (pointers.size === 2) {
+  if (pointers.size === 1) gesture = { x0: e.clientX, y0: e.clientY, t0: performance.now(), moved: false };
+  else if (pointers.size === 2) {
     const [a, b] = [...pointers.values()];
-    gesture = { pinch: Math.hypot(a.x - b.x, a.y - b.y), zoom0: zoom, moved: true, samples: [] };
+    gesture = { pinch: Math.hypot(a.x - b.x, a.y - b.y), zoom0: view.zoom, moved: true };
   }
 });
 
@@ -913,16 +647,18 @@ canvas.addEventListener('pointermove', (e) => {
   p.y = e.clientY;
   if (pointers.size === 2 && gesture.pinch) {
     const [a, b] = [...pointers.values()];
-    zoom = THREE.MathUtils.clamp((gesture.zoom0 * Math.hypot(a.x - b.x, a.y - b.y)) / gesture.pinch, 0.7, 2.2);
-    fitCamera();
+    const z = (gesture.zoom0 * Math.hypot(a.x - b.x, a.y - b.y)) / gesture.pinch;
+    zoomAt((a.x + b.x) / 2, (a.y + b.y) / 2, z);
+    view.panX += dx / 2;
+    view.panY += dy / 2;
+    layout();
     return;
   }
-  if (!gesture.moved && Math.hypot(e.clientX - gesture.x0, e.clientY - gesture.y0) > 8) gesture.moved = true;
-  if (gesture.moved) {
-    rotateBy(dx, dy);
-    const now = performance.now();
-    gesture.samples.push({ t: now, dx, dy });
-    while (gesture.samples.length && now - gesture.samples[0].t > 90) gesture.samples.shift();
+  if (!gesture.moved && Math.hypot(e.clientX - gesture.x0, e.clientY - gesture.y0) > 10) gesture.moved = true;
+  if (gesture.moved && view.zoom > 1) {
+    view.panX += dx;
+    view.panY += dy;
+    layout();
   }
 });
 
@@ -931,75 +667,51 @@ function endPointer(e) {
   pointers.delete(e.pointerId);
   if (!gesture) return;
   if (pointers.size === 0) {
-    if (!gesture.moved && performance.now() - gesture.t0 < 450) tap(e.clientX, e.clientY);
-    else if (gesture.samples.length > 1) {
-      const s = gesture.samples;
-      const dt = Math.max(16, s[s.length - 1].t - s[0].t) / 1000;
-      spin.x = s.reduce((acc, v) => acc + v.dx, 0) / dt;
-      spin.y = s.reduce((acc, v) => acc + v.dy, 0) / dt;
-    }
+    if (!gesture.moved && performance.now() - gesture.t0 < 500) tap(e.clientX, e.clientY);
     gesture = null;
-  } else gesture = { moved: true, samples: [] };
+  } else gesture = { moved: true };
 }
 canvas.addEventListener('pointerup', endPointer);
 canvas.addEventListener('pointercancel', endPointer);
-canvas.addEventListener('wheel', (e) => {
-  e.preventDefault();
-  zoom = THREE.MathUtils.clamp(zoom * Math.exp(-e.deltaY * 0.001), 0.7, 2.2);
-  fitCamera();
-}, { passive: false });
+canvas.addEventListener(
+  'wheel',
+  (e) => {
+    e.preventDefault();
+    zoomAt(e.clientX, e.clientY, view.zoom * Math.exp(-e.deltaY * 0.002));
+  },
+  { passive: false },
+);
 document.addEventListener('gesturestart', (e) => e.preventDefault());
 
-const raycaster = new THREE.Raycaster();
-function tap(x, y) {
+function tap(px, py) {
   if (!game || game.over) return;
-  const r = canvas.getBoundingClientRect();
-  const ndc = new THREE.Vector2(((x - r.left) / r.width) * 2 - 1, -((y - r.top) / r.height) * 2 + 1);
-  raycaster.setFromCamera(ndc, camera);
-  const hit = raycaster.intersectObject(game.box)[0];
-  if (!hit) return;
-  const N = game.N;
-  const l = cube.worldToLocal(hit.point.clone()).multiplyScalar(2);
-  const c = [l.x, l.y, l.z];
-  let ax = 0;
-  for (let i = 1; i < 3; i++) if (Math.abs(c[i]) > Math.abs(c[ax])) ax = i;
-  const snap = (v) => 2 * THREE.MathUtils.clamp(Math.floor((v + N) / 2), 0, N - 1) - N + 1;
-  const base = c.map((v, i) => (i === ax ? Math.sign(v) * N : snap(v)));
-  // Exact cell first, then the nearest arrow in the neighbouring cells.
-  let best = null;
+  const { W, H, occ } = game;
+  const [gx, gy] = toGrid(px, py);
+  const cx = Math.floor(gx);
+  const cy = Math.floor(gy);
+  // The cell under the finger first, then the nearest arrow next to it.
+  let best = -1;
   let bestD = Infinity;
-  const [u, w] = [0, 1, 2].filter((i) => i !== ax);
-  for (const du of [0, -2, 2]) {
-    for (const dw of [0, -2, 2]) {
-      const p = base.slice();
-      p[u] += du;
-      p[w] += dw;
-      if (Math.abs(p[u]) > N - 1 || Math.abs(p[w]) > N - 1) continue;
-      const id = game.occ.get(key(p));
-      if (id === undefined) continue;
-      const d = Math.hypot(p[u] - c[u], p[w] - c[w]);
+  for (let y = cy - 1; y <= cy + 1; y++) {
+    for (let x = cx - 1; x <= cx + 1; x++) {
+      if (x < 0 || y < 0 || x >= W || y >= H) continue;
+      const id = occ[y * W + x];
+      if (id < 0) continue;
+      const d = x === cx && y === cy ? 0 : Math.hypot(x + 0.5 - gx, y + 0.5 - gy);
       if (d < bestD) {
         bestD = d;
         best = id;
       }
     }
   }
-  if (best !== null && bestD < 1.9) tryFree(game.arrows[best]);
+  if (best >= 0 && bestD < 0.95) tryFree(game.arrows[best]);
 }
 
 // ---------------------------------------------------------------- buttons
 function applyTheme() {
-  theme = THEMES[save.dark ? 'dark' : 'light'];
   document.documentElement.dataset.theme = save.dark ? 'dark' : 'light';
-  document.querySelector('meta[name="theme-color"]').content = save.dark ? '#1d1b23' : '#efe7da';
-  const col = cubeColors();
-  mats.arrow.color.setHex(col.arrow);
-  if (game) {
-    const old = game.box.material.map;
-    game.box.material.map = faceTexture(game.N);
-    old.dispose();
-    game.edges.material.color.setHex(col.edge);
-  }
+  document.querySelector('meta[name="theme-color"]').content = save.dark ? '#1d1b23' : '#fbfaf8';
+  dirty = true;
 }
 applyTheme();
 
@@ -1008,35 +720,37 @@ function applyLang(l) {
   persist();
   setLang(l);
   document.querySelectorAll('[data-lang]').forEach((b) => b.classList.toggle('sel', b.dataset.lang === lang));
-  renderSkins();
+  renderPalettes();
   renderAchievements();
+  renderDailyBtn();
   if (game) {
     updateHud();
     renderWinRank();
     if ($('tip').classList.contains('show')) showTutorial(game.mode === 'level' ? game.level : 0);
   }
+  if ($('levels').classList.contains('show')) renderLevels();
 }
 
-const on = (id, fn) => $(id).addEventListener('click', (e) => {
-  e.stopPropagation();
-  unlockAudio();
-  sfx.click();
-  fn(e);
-});
-on('themeBtn', () => {
-  save.dark = !save.dark;
-  persist();
-  applyTheme();
-});
+const on = (id, fn) =>
+  $(id).addEventListener('click', (e) => {
+    e.stopPropagation();
+    unlockAudio();
+    sfx.click();
+    fn(e);
+  });
+on('backBtn', openLevels);
 on('hintBtn', useHint);
-on('hammerBtn', toggleHammer);
-on('viewBtn', () => animateTo(ISO));
-on('dailyBtn', () => (game.mode === 'daily' ? animateTo(ISO) : startDaily()));
+on('dailyBtn', () => game.mode !== 'daily' && startDaily());
+on('paletteBtn', () => {
+  renderPalettes();
+  $('palette').classList.add('show');
+});
+on('palClose', () => $('palette').classList.remove('show'));
 on('settingsBtn', () => {
   $('soundToggle').checked = save.sound;
   $('vibeToggle').checked = save.vibe;
+  $('darkToggle').checked = save.dark;
   document.querySelectorAll('[data-lang]').forEach((b) => b.classList.toggle('sel', b.dataset.lang === lang));
-  renderSkins();
   renderAchievements();
   $('settings').classList.add('show');
 });
@@ -1045,15 +759,16 @@ on('restartBtn', restart);
 on('resetBtn', () => {
   if (!confirm(t('resetConfirm'))) return;
   Object.assign(save, {
-    level: 1, score: 0, best: {}, hints: 3, hammers: 2, stars: {}, skin: 'classic',
-    daily: { last: '', streak: 0, done: {} }, ach: {}, counters: {},
+    level: 1, score: 0, best: {}, hints: 3, stars: {}, palette: 'classic',
+    daily: { last: '', streak: 0, done: {} }, ach: {},
   });
   persist();
-  applyTheme();
   startLevel(1);
 });
 on('nextBtn', () => startLevel(game.mode === 'daily' ? save.level : game.level + 1));
 on('shareBtn', shareDaily);
+on('replayBtn', restart);
+on('retryBtn', restart);
 on('lbBtn', openLeaderboard);
 on('lbClose', () => {
   $('leaderboard').classList.remove('show');
@@ -1064,10 +779,26 @@ on('lbRename', () => {
   $('lbJoin').hidden = false;
   $('lbName').focus();
 });
+on('lvClose', () => $('levels').classList.remove('show'));
+on('lvPrev', () => {
+  lvPage--;
+  renderLevels();
+});
+on('lvNext', () => {
+  lvPage++;
+  renderLevels();
+});
+$('lvGrid').addEventListener('click', (e) => {
+  const b = e.target.closest('[data-lv]');
+  if (!b) return;
+  unlockAudio();
+  sfx.click();
+  const n = Number(b.dataset.lv);
+  if (n > save.level) shout(t('levelLocked', { n: fmtPlain(save.level) }));
+  else startLevel(n);
+});
 $('lbName').addEventListener('keydown', (e) => e.key === 'Enter' && saveName());
 $('lbBtn').hidden = !leaderboardEnabled;
-on('replayBtn', restart);
-on('retryBtn', restart);
 $('soundToggle').addEventListener('change', (e) => {
   save.sound = audio.enabled = e.target.checked;
   persist();
@@ -1076,15 +807,22 @@ $('vibeToggle').addEventListener('change', (e) => {
   save.vibe = e.target.checked;
   persist();
 });
-document.querySelectorAll('[data-lang]').forEach((b) => b.addEventListener('click', () => {
-  sfx.click();
-  applyLang(b.dataset.lang);
-}));
-$('skins').addEventListener('click', (e) => {
-  const b = e.target.closest('[data-skin]');
+$('darkToggle').addEventListener('change', (e) => {
+  save.dark = e.target.checked;
+  persist();
+  applyTheme();
+});
+document.querySelectorAll('[data-lang]').forEach((b) =>
+  b.addEventListener('click', () => {
+    sfx.click();
+    applyLang(b.dataset.lang);
+  }),
+);
+$('palettes').addEventListener('click', (e) => {
+  const b = e.target.closest('[data-pal]');
   if (!b) return;
   sfx.click();
-  pickSkin(b.dataset.skin);
+  pickPalette(b.dataset.pal);
 });
 
 // ---------------------------------------------------------------- leaderboard
@@ -1150,8 +888,10 @@ function loadLeaderboard() {
 
 function row(rank, r, me) {
   const medal = ['🥇', '🥈', '🥉'][rank - 1] || fmt(rank);
-  return `<li class="${me ? 'me' : ''}"><span class="rk">${medal}</span><span class="nm"><bdi>${esc(r.name)}</bdi></span>` +
-    `<span class="lv">${t('lv', { n: Number(r.level) })}</span><span class="sc">${fmt(Number(r.score))}</span></li>`;
+  return (
+    `<li class="${me ? 'me' : ''}"><span class="rk">${medal}</span><span class="nm"><bdi>${esc(r.name)}</bdi></span>` +
+    `<span class="lv">${t('lv', { n: fmtPlain(Number(r.level)) })}</span><span class="sc">${fmt(Number(r.score))}</span></li>`
+  );
 }
 
 function saveName() {
@@ -1175,152 +915,53 @@ function saveName() {
 }
 
 // ---------------------------------------------------------------- main loop
-const ease = (x) => 1 - Math.pow(1 - x, 3);
 let last = performance.now();
-let pulse = 0;
 
 function frame(now) {
   const dt = Math.min(0.05, (now - last) / 1000);
   last = now;
-  pulse += dt;
-
-  if (rot.t < 1) {
-    rot.t = Math.min(1, rot.t + dt / rot.dur);
-    cube.quaternion.slerpQuaternions(rot.from, rot.to, ease(rot.t));
-  } else if (!gesture && (spin.x || spin.y)) {
-    rotateBy(spin.x * dt, spin.y * dt);
-    const decay = Math.exp(-3.2 * dt);
-    spin.x *= decay;
-    spin.y *= decay;
-    if (Math.abs(spin.x) + Math.abs(spin.y) < 2) spin.x = spin.y = 0;
-  }
-
   if (game) {
-    const introT = Math.min(1, (game.intro += dt / 0.7));
-    cube.scale.setScalar(0.6 + 0.4 * ease(introT));
-    mats.hint.emissiveIntensity = 0.3 + 0.3 * Math.sin(pulse * 8);
-    mats.gold.emissiveIntensity = 0.3 + 0.15 * Math.sin(pulse * 5);
-    mats.bombRing.color.setHSL(0.07, 1, 0.5 + 0.1 * Math.sin(pulse * 4));
-
-    // Fever timer and heat meter.
-    const heat = $('heat');
-    if (game.fever > 0) {
-      game.fever -= dt;
-      heat.classList.add('on');
-      $('heatFill').style.transform = `scaleX(${Math.max(0, game.fever / 8)})`;
-      if (game.fever <= 0) endFever();
-    } else {
-      heat.classList.remove('on');
-      const warm = now - game.lastFree < 1600 && !game.over ? Math.min(game.combo, 8) / 8 : 0;
-      $('heatFill').style.transform = `scaleX(${warm})`;
-    }
-
-    if (game.boss && !game.over && game.left > 0 && introT >= 1) {
-      game.timeLeft = Math.max(0, game.timeLeft - dt);
-      const secs = Math.ceil(game.timeLeft);
-      $('timer').textContent = '👑 ' + fmtTime(secs);
-      $('timer').classList.toggle('low', secs <= 10);
-      if (secs <= 10 && secs !== game.lastTick && secs > 0) sfx.tick();
-      game.lastTick = secs;
-      if (game.timeLeft <= 0) {
-        game.over = true;
-        game.hammer = false;
-        endFever();
-        sfx.block();
-        shake();
-        setTimeout(() => showLose(true), 600);
-      }
-    }
-
-    for (let i = game.blasts.length - 1; i >= 0; i--) {
-      const b = game.blasts[i];
-      b.t -= dt;
-      if (b.t <= 0) {
-        game.blasts.splice(i, 1);
-        explode(b.a);
-        updateHud();
-      }
-    }
-
     for (const a of game.arrows) {
       if (a.state === 'exit') {
-        a.v = Math.min(55, a.v + 80 * dt);
+        a.v = Math.min(60, a.v + 70 * dt);
         a.s += a.v * dt;
-        const tr = a.track;
-        if (!a.burst && a.s >= tr.rayLen) {
-          a.burst = true;
-          const d = a.data.dir;
-          const hp = tr.window(tr.bodyLen + tr.rayLen - 0.01, tr.bodyLen + tr.rayLen)[0].b;
-          burst(hp, new THREE.Vector3(d[0], d[1], d[2]), a.mesh.material.color, 8);
-        }
-        const end = tr.total - tr.bodyLen;
-        if (a.s >= end) {
+        const p = a.path;
+        a.alpha = Math.max(0, Math.min(1, (p.exitEnd - a.s) / Math.max(1, p.bodyLen)));
+        if (a.s >= p.exitEnd) {
           a.state = 'gone';
-          cube.remove(a.mesh);
-          a.mesh.geometry.dispose();
-          a.mesh.material.dispose();
-          checkWin();
-          continue;
-        }
-        a.mesh.material.opacity = 1 - Math.max(0, (a.s - tr.rayLen) / (end - tr.rayLen)) ** 1.5;
-        buildArrowGeometry(tr, a.s, a.s + tr.bodyLen, a.mesh.geometry);
-      } else if (a.state === 'pop') {
-        a.t += dt;
-        a.mesh.material.opacity = Math.max(0, 1 - a.t / 0.35);
-        if (a.marker) a.marker.visible = a.t < 0.1;
-        if (a.t >= 0.35) {
-          a.state = 'gone';
-          cube.remove(a.mesh);
-          a.mesh.geometry.dispose();
-          a.mesh.material.dispose();
           checkWin();
         }
+        dirty = true;
       } else if (a.state === 'bump') {
         if (a.phase === 1) {
-          a.s = Math.min(a.bumpTo, a.s + 18 * dt);
+          a.s = Math.min(a.bumpTo, a.s + 16 * dt);
           if (a.s >= a.bumpTo) a.phase = 2;
         } else {
-          a.s = Math.max(0, a.s - 11 * dt);
-          if (a.s <= 0) {
-            a.state = 'idle';
-            a.flash = 0.5;
-          }
+          a.s = Math.max(0, a.s - 10 * dt);
+          if (a.s <= 0) a.state = 'idle';
         }
-        buildArrowGeometry(a.track, a.s, a.s + a.track.bodyLen, a.mesh.geometry);
-        if (a.marker) placeMarker(a);
-      } else if (a.flash > 0) {
+        dirty = true;
+      }
+      if (a.flash > 0) {
         a.flash -= dt;
-        if (a.flash <= 0 && a.state === 'idle') a.mesh.material = game.hinted === a ? mats.hint : baseMat(a);
+        dirty = true;
       }
     }
   }
-
-  for (let i = particles.length - 1; i >= 0; i--) {
-    const p = particles[i];
-    p.t += dt;
-    p.v.multiplyScalar(Math.exp(-2 * dt));
-    p.m.position.addScaledVector(p.v, dt);
-    p.m.rotation.x += dt * 6;
-    p.m.material.opacity = Math.max(0, 1 - p.t / p.life);
-    if (p.t >= p.life) {
-      cube.remove(p.m);
-      p.m.material.dispose();
-      particles.splice(i, 1);
-    }
-  }
-
-  renderer.render(scene, camera);
+  if (dirty) draw();
   requestAnimationFrame(frame);
 }
 
-fitCamera();
-startLevel(save.level);
+resize();
+startLevel(Math.max(1, save.level));
 requestAnimationFrame(frame);
 window.__fozReady = true;
 
 // Debug/test hook.
 window.__foz = {
-  get game() { return game; }, tryFree, startLevel, startDaily, blockersOf, applyLang,
-  headScreen: (a) => worldToScreen(headWorld(a)),
-  facing: (a) => new THREE.Vector3(...headOf(a).n).applyQuaternion(cube.quaternion).z,
+  get game() {
+    return game;
+  },
+  tryFree, startLevel, startDaily, blockersOf, applyLang, useHint,
+  headScreen: (a) => toScreen(a.path.head[0], a.path.head[1]),
 };

@@ -1,32 +1,36 @@
 # Foz Arrows
 
-A 3D arrow puzzle for mobile: spin the cube and tap arrows to slide them off.
-An arrow can only leave when nothing blocks it between its head and the edge
-of its face. Tapping a blocked arrow costs a heart. Clear the cube to win.
+An arrow-maze puzzle for phones and tablets. Every arrow slides forward along
+its own path when you tap it, and leaves the board if nothing is in its way all
+the way to the edge. Tapping a blocked arrow costs a 💧; lose all three and the
+level restarts. Free every arrow to win.
 
 Play: https://voidwave.com/FozArrows/
 
-- Endless levels. The cubes get bigger (2×2 up to 8×8 per face) and the arrows get longer.
-- Every level can be solved. The generator places arrows in reverse removal order.
-- Special arrows: ✨ golden (triple points), 💣 bombs (blast neighbouring arrows, and can set off chains), and 🔒🔑 lock-and-key pairs (a locked arrow opens once its matching key arrow is freed).
-- 🔨 Hammer power-up: smash any arrow when you're stuck.
-- 👑 Boss levels: every 10th level is against the clock.
-- 🎁 Gift chests every third level and after each boss, with extra hints or hammers.
-- 🏅 Ten achievements, each worth a bonus hint.
-- 🔥 Fever: free 8 arrows in quick succession for double points, shown with a calm warm glow. A mistake ends it.
-- 📅 Daily Challenge: the same puzzle for everyone each day, with a streak counter and a share button.
-- 🎨 Six cube styles, unlocked by collecting stars.
-- English and Arabic (عربي), with a right-to-left layout and Arabic numerals. Arabic is picked automatically on Arabic-language phones.
-- Combos, stars, hints, sound, haptics, dark mode, and saved progress.
-- A free global leaderboard on Google Sheets. See [leaderboard/README.md](leaderboard/README.md) for the 5-minute setup.
+- **Hundreds of levels.** Boards grow from a tiny 4×6 grid to dense 22×35 mazes
+  with over 100 winding arrows. Levels are generated from their number, so
+  level 250 is the same for everyone, and every level is guaranteed solvable.
+- **Level select** behind the ← button, 100 levels per page, with your stars.
+- **Pinch to zoom** and drag around big boards.
+- **💡 Hints** number your next moves: tap the 1s first, then the 2s.
+- 📅 **Daily Challenge** with a streak counter and a share button.
+- 🏆 **Global leaderboard** on Google Sheets. See [leaderboard/README.md](leaderboard/README.md).
+- 🏅 Ten achievements, 🎨 seven arrow colours unlocked with stars, combos, dark mode.
+- **English and Arabic (عربي)**, with a right-to-left layout and Arabic numerals.
 
 ## Develop
 
 ```sh
 npm install
 npm run dev     # rebuilds on change and serves http://localhost:8000
-npm test        # checks the generator on 300 levels: all solvable, no overlaps
+npm test        # generates 155 levels and checks each one is solvable and well formed
 npm run build   # writes dist/game.js (committed so GitHub Pages can serve it)
 ```
 
 The site is fully static: `index.html` + `dist/game.js`. There is no build step on Pages.
+
+- `src/grid.js` – board model and the level generator. Arrows are placed in
+  reverse removal order, from the centre outwards, so every level is solvable
+  and the board packs tightly.
+- `src/levels.js` – level size and difficulty curve.
+- `src/main.js` – rendering (canvas), input, screens and saving.
